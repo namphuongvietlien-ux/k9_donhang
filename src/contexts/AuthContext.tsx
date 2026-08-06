@@ -72,33 +72,55 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
       /* ignore */
     }
 
+    const rpcMissingKey = "k9_rpc_get_my_store_scope_missing";
+    const rpcKnownMissing =
+      typeof sessionStorage !== "undefined" &&
+      sessionStorage.getItem(rpcMissingKey) === "1";
+
     // 1) RPC SECURITY DEFINER — không phụ thuộc RLS profiles bị sai
-    try {
-      const { data: rpcRows, error: rpcErr } = await supabase.rpc(
-        "get_my_store_scope" as never,
-      );
-      if (!rpcErr && rpcRows) {
-        const row = (
-          Array.isArray(rpcRows) ? rpcRows[0] : rpcRows
-        ) as {
-          username?: string | null;
-          warehouse_id?: string | null;
-          warehouse_code?: string | null;
-          warehouse_label?: string | null;
-        } | null;
-        if (row && (row.warehouse_id != null || row.username != null)) {
-          setUsername(row.username || null);
-          setWarehouseId(row.warehouse_id || null);
-          setWarehouseCode(row.warehouse_code || null);
-          setWarehouseLabel(
-            row.warehouse_label ||
-              (row.warehouse_id ? "Chi nhánh" : "Tất cả"),
-          );
-          return;
+    if (!rpcKnownMissing) {
+      try {
+        const { data: rpcRows, error: rpcErr } = await supabase.rpc(
+          "get_my_store_scope" as never,
+        );
+        const msg = String(rpcErr?.message || "");
+        const code = String((rpcErr as { code?: string } | null)?.code || "");
+        // 404 / PGRST202 — chưa chạy SQL tạo hàm trên Supabase
+        if (
+          rpcErr &&
+          (/PGRST202|PGRST204|404|not find|does not exist|Could not find the function/i.test(
+            msg + code,
+          ) ||
+            (rpcErr as { status?: number }).status === 404)
+        ) {
+          try {
+            sessionStorage.setItem(rpcMissingKey, "1");
+          } catch {
+            /* ignore */
+          }
+        } else if (!rpcErr && rpcRows) {
+          const row = (
+            Array.isArray(rpcRows) ? rpcRows[0] : rpcRows
+          ) as {
+            username?: string | null;
+            warehouse_id?: string | null;
+            warehouse_code?: string | null;
+            warehouse_label?: string | null;
+          } | null;
+          if (row && (row.warehouse_id != null || row.username != null)) {
+            setUsername(row.username || null);
+            setWarehouseId(row.warehouse_id || null);
+            setWarehouseCode(row.warehouse_code || null);
+            setWarehouseLabel(
+              row.warehouse_label ||
+                (row.warehouse_id ? "Chi nhánh" : "Tất cả"),
+            );
+            return;
+          }
         }
+      } catch {
+        /* rpc chưa có — fallback */
       }
-    } catch {
-      /* rpc chưa có — fallback */
     }
 
     try {
