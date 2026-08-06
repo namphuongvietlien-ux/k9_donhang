@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    
+    <!-- Primary Meta Tags -->
+    <title>Hệ Thống Quản Lý Kho</title>
+    <meta name="title" content="Hệ Thống Quản Lý Kho" />
+    <meta name="description" content="Hệ thống vận hành kho nội bộ — tạo đơn, điều chuyển, soạn hàng và xác nhận nhận hàng." />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="author" content="Kho nội bộ K9" />
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Hệ Thống Quản Lý Kho" />
+    <meta property="og:description" content="Hệ thống vận hành kho nội bộ — tạo đơn, điều chuyển, soạn hàng và xác nhận nhận hàng." />
+    <meta property="og:locale" content="vi_VN" />
+    <meta property="og:site_name" content="Hệ Thống Quản Lý Kho" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Hệ Thống Quản Lý Kho" />
+    <meta name="twitter:description" content="Hệ thống vận hành kho nội bộ — tạo đơn, điều chuyển, soạn hàng và xác nhận nhận hàng." />
+
+    <!-- Additional SEO -->
+    <meta name="geo.region" content="VN" />
+    <meta name="geo.placename" content="Ho Chi Minh City" />
+    <meta name="language" content="Vietnamese" />
+
+    <!-- Resource Hints for Performance - Reduce Network Dependency Chain -->
+    <!-- Preconnect to external domains EARLY to reduce chain length -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="dns-prefetch" href="https://fonts.googleapis.com" />
+    <link rel="dns-prefetch" href="https://fonts.gstatic.com" />
+    
+    <!-- Preconnect to Supabase - Critical for API calls and LCP -->
+    <!-- Preconnect to common Supabase domains to reduce connection time -->
+    <link rel="preconnect" href="https://oalvdskskldifpbejfoc.supabase.co" crossorigin />
+    <link rel="dns-prefetch" href="https://oalvdskskldifpbejfoc.supabase.co" />
+    
+    <!-- Note: Hero image preload removed - image is imported as module in SpiceHero component -->
+    <!-- The OptimizedImage component with priority={true} handles LCP optimization -->
+    
+    <!-- Load Google Fonts asynchronously to avoid blocking render -->
+    <!-- Use JavaScript to load fonts after initial render for better LCP -->
+    <script>
+      // Load fonts asynchronously after page load to avoid blocking render
+      (function() {
+        var fontLinks = [
+          'https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&display=swap',
+          'https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600;700&display=swap',
+          'https://fonts.googleapis.com/css2?family=Inconsolata:wght@400;700&display=swap'
+        ];
+        
+        function loadFonts() {
+          fontLinks.forEach(function(href) {
+            var link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = href;
+            link.media = 'all';
+            document.head.appendChild(link);
+          });
+        }
+        
+        // Load fonts after initial render
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', loadFonts);
+        } else {
+          // Use requestIdleCallback if available, otherwise setTimeout
+          if (window.requestIdleCallback) {
+            requestIdleCallback(loadFonts, { timeout: 2000 });
+          } else {
+            setTimeout(loadFonts, 0);
+          }
+        }
+      })();
+    </script>
+    <!-- Fallback for browsers without JavaScript -->
+    <noscript>
+      <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+      <link href="https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600;700&display=swap" rel="stylesheet" />
+      <link href="https://fonts.googleapis.com/css2?family=Inconsolata:wght@400;700&display=swap" rel="stylesheet" />
+    </noscript>
+    
+    <!-- Critical CSS - Inline above-the-fold styles to avoid render blocking -->
+    <style>
+      /* Critical CSS for initial render - prevents FOUC and improves LCP */
+      body {
+        margin: 0;
+        font-family: 'Work Sans', ui-sans-serif, system-ui, sans-serif;
+        background-color: hsl(0 0% 100%);
+        color: hsl(0 0% 15%);
+      }
+      #root {
+        min-height: 100vh;
+      }
+      /* Prevent layout shift during font load */
+      * {
+        font-display: swap;
+      }
+      /* Optimize hero section for LCP - ensure it's visible immediately */
+      section[id="home"] {
+        contain: layout style paint;
+      }
+      /* Prevent layout shift for hero image */
+      img[fetchpriority="high"] {
+        content-visibility: auto;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <!-- Defer script loading - load after HTML parsing -->
+    <script type="module" src="/src/main.tsx" defer></script>
+  </body>
+</html>

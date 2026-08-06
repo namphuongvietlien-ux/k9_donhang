@@ -1,0 +1,50 @@
+project_id = "czipsqvicknkiyjuifqv"
+[functions.hello-world]
+enabled = true
+verify_jwt = true
+import_map = "./functions/hello-world/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/hello-world/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/hello-world/*.html" ]
+
+[functions.ai-chatbot]
+enabled = true
+verify_jwt = false  # Allow anonymous access for chatbot
+entrypoint = "./functions/ai-chatbot/index.ts"
+
+[functions.shopee-tracking]
+enabled = true
+verify_jwt = false
+
+[functions.jt-tracking]
+enabled = true
+verify_jwt = false  # We'll verify manually to have better error handling
+entrypoint = "./functions/jt-tracking/index.ts"
+
+[functions.auto-sync-tiktok-tracking]
+enabled = true
+verify_jwt = false
+
+[functions.ghn-tracking]
+enabled = true
+verify_jwt = false  # Called by cron, no user auth needed
+entrypoint = "./functions/auto-sync-tiktok-tracking/index.ts"
+
+[functions.send-admin-otp]
+enabled = true
+verify_jwt = false  # We'll verify manually to have better error handling
+entrypoint = "./functions/send-admin-otp/index.ts"
+
+[functions.create-admin-user]
+enabled = true
+# JWT verified inside function (has_permission). Gateway verify_jwt blocks OPTIONS preflight → CORS errors.
+verify_jwt = false
+entrypoint = "./functions/create-admin-user/index.ts"
+
+[functions.notify-telegram]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/notify-telegram/index.ts"
