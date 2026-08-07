@@ -270,7 +270,7 @@ export default function WarehouseOrderDetail({
         variant: "destructive",
       });
       focusScan();
-      return;
+      return false;
     }
     const ma = normalizeOrderCodeText(p.slug);
     const opts = resolveAvailableVariants(
@@ -293,19 +293,128 @@ export default function WarehouseOrderDetail({
 
     setNewSlug(ma);
     setNewName(p.name);
-    setNewUnit(match?.unit || p.unit || "Cái");
+    setNewUnit(match?.unit || p.unit || "cái");
     setNewBarcode(match?.barcode || p.barcode || "");
     setNewPrice(match?.price ?? p.price ?? 0);
     setNewQty(1);
     setScan(ma);
     setSuggestOpen(false);
     focusQty();
+    return true;
   };
 
-  const handleAdd = async () => {
-    const slug = normalizeOrderCodeText(newSlug) || normalizeOrderCodeText(scan);
-    const name = newName.trim();
-    if (!slug) {
+  /** Resolve mã từ ô tìm / catalog khi user chưa bấm dòng gợi ý */
+  const resolveAddPayload = () => {
+    const q = normalizeOrderCodeText(newSlug) || normalizeOrderCodeText(scan);
+    if (!q) return null;
+
+    let slug = normalizeOrderCodeText(newSlug) || q;
+    let name = newName.trim();
+    let unit = newUnit.trim();
+    let barcode = newBarcode.trim();
+    let price = newPrice;
+    let productId: string | null = null;
+
+    const bySlug = catalogList.find(
+      (p) => normalizeOrderCodeText(p.slug) === slug,
+    );
+    const byScan = catalogList.filter((p) => {
+      const bc = normalizeOrderCodeText(p.barcode || "");
+      const bc2 = normalizeOrderCodeText(p.barcode_2 || "");
+      const s = normalizeOrderCodeText(p.slug);
+      return (bc && bc === q) || (bc2 && bc2 === q) || (s && s === q);
+    });
+    const hit = bySlug || (byScan.length === 1 ? byScan[0] : null);
+
+    if (hit) {
+      const block = checkCatalogAddBlocked(hit);
+      if (block.blocked) {
+        return { error: block as { title: string; description: string } };
+      }
+      slug = normalizeOrderCodeText(hit.slug);
+      name = name || hit.name;
+      productId = hit.id;
+      if (!unit) {
+        const opts = resolveAvailableVariants(
+          catalogList as CatalogProductRow[],
+          slug,
+        );
+        const unitOpts =
+          opts.length > 0
+            ? opts
+            : expandProductUnitOptions(hit as CatalogProductRow);
+        const bcPref = normalizeOrderCodeText(barcode || scan.trim());
+        const match =
+          unitOpts.find(
+            (o) =>
+              bcPref && normalizeOrderCodeText(o.barcode) === bcPref,
+          ) ||
+          unitOpts[0] ||
+          null;
+        unit = match?.unit || hit.unit || "cái";
+        barcode = match?.barcode || hit.barcode || barcode;
+        price = match?.price ?? hit.price ?? price;
+      }
+    }
+
+    return { slug, name, unit, barcode, price, productId };
+  };
+
+  type AddPayload = {
+    slug: string;
+    name: string;
+    unit: string;
+    barcode: string;
+    price: number;
+    productId: string | null;
+  };
+
+  const payloadFromHit = (
+    p: CatalogHit,
+    preferredBarcode?: string,
+  ): AddPayload | null => {
+    const block = checkCatalogAddBlocked(p);
+    if (block.blocked) {
+      toast({
+        title: block.title,
+        description: block.description || undefined,
+        variant: "destructive",
+      });
+      focusScan();
+      return null;
+    }
+    const slug = normalizeOrderCodeText(p.slug);
+    const opts = resolveAvailableVariants(
+      catalogList as CatalogProductRow[],
+      slug,
+    );
+    const unitOpts =
+      opts.length > 0
+        ? opts
+        : expandProductUnitOptions(p as CatalogProductRow);
+    const bcPref = normalizeOrderCodeText(
+      preferredBarcode || scan.trim(),
+    );
+    const match =
+      unitOpts.find(
+        (o) =>
+          bcPref && normalizeOrderCodeText(o.barcode) === bcPref,
+      ) ||
+      unitOpts[0] ||
+      null;
+    return {
+      slug,
+      name: p.name,
+      unit: match?.unit || p.unit || "cái",
+      barcode: match?.barcode || p.barcode || "",
+      price: match?.price ?? p.price ?? 0,
+      productId: p.id,
+    };
+  };
+
+  const handleAdd = async (override?: AddPayload) => {
+    const resolved = override ?? resolveAddPayload();
+    if (!resolved) {
       toast({
         title: "Chưa chọn mã",
         description: "Tìm và chọn sản phẩm trước khi thêm.",
@@ -314,14 +423,37 @@ export default function WarehouseOrderDetail({
       focusScan();
       return;
     }
+    if ("error" in resolved && resolved.error) {
+      toast({
+        title: resolved.error.title,
+        description: resolved.error.description || undefined,
+        variant: "destructive",
+      });
+      focusScan();
+      return;
+    }
+    const { slug, name, unit, barcode, price, productId } = resolved as AddPayload;
+
     if (!name) {
+      // Mã ngoài: hiện ô tên
+      setNewSlug(slug);
+      setNewName("");
+      setNewUnit(unit || "cái");
+      setNewBarcode(barcode || "");
+      setSuggestOpen(false);
       toast({
         title: "Thiếu tên hàng",
         description: `Điền tên cho mã ${slug} (mã ngoài / hàng mới).`,
         variant: "destructive",
       });
+      window.setTimeout(() => {
+        document
+          .querySelector<HTMLInputElement>('input[data-add-name="1"]')
+          ?.focus();
+      }, 50);
       return;
     }
+
     const catalogHit = catalogList.find(
       (p) => normalizeOrderCodeText(p.slug) === slug,
     );
@@ -340,12 +472,12 @@ export default function WarehouseOrderDetail({
       (it) =>
         normalizeOrderCodeText(it.product_slug || "") === slug &&
         normalizeOrderCodeText(it.unit || "") ===
-          normalizeOrderCodeText(newUnit),
+          normalizeOrderCodeText(unit),
     );
     if (dup) {
       toast({
         title: "Mã đã có trong đơn",
-        description: `${slug} (${newUnit || "—"}) đã tồn tại — sửa SL trên bảng.`,
+        description: `${slug} (${unit || "—"}) đã tồn tại — sửa SL trên bảng.`,
         variant: "destructive",
       });
       focusScan();
@@ -357,9 +489,10 @@ export default function WarehouseOrderDetail({
         productName: name,
         productSlug: slug || name,
         quantity: qty,
-        barcode: newBarcode.trim() || null,
-        unit: newUnit.trim() || null,
-        price: newPrice || 0,
+        barcode: barcode || null,
+        unit: unit || null,
+        price: price || 0,
+        productId,
       });
       clearAddForm();
       toast({ title: `Đã thêm ${slug || name} × ${qty}` });
@@ -396,11 +529,17 @@ export default function WarehouseOrderDetail({
       return (bc && bc === q) || (bc2 && bc2 === q) || (slug && slug === q);
     });
     if (exact.length === 1) {
+      const payload = payloadFromHit(exact[0], scan.trim());
+      if (!payload) return;
       pickProduct(exact[0], scan.trim());
+      void handleAdd(payload);
       return;
     }
     if (suggestions.length === 1) {
+      const payload = payloadFromHit(suggestions[0], scan.trim());
+      if (!payload) return;
       pickProduct(suggestions[0], scan.trim());
+      void handleAdd(payload);
       return;
     }
     if (suggestions.length > 1) {
@@ -806,7 +945,7 @@ export default function WarehouseOrderDetail({
       </div>
 
       {!locked && (
-        <div className="border rounded-lg p-3 space-y-2 bg-card relative sticky top-0 z-30 shadow-sm">
+        <div className="border rounded-lg p-3 space-y-2 bg-card relative sticky top-0 z-50 shadow-sm overflow-visible">
           <p className="text-xs text-muted-foreground">
             Enter thêm mã → lưu ngay. Sửa <strong>SL yêu cầu</strong> rồi bấm{" "}
             <strong>Lưu xác nhận</strong>. Soạn hàng (SL soạn) làm ở tab{" "}

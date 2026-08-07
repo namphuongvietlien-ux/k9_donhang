@@ -52,7 +52,11 @@ export function CatalogSuggestItem({
         blocked && "opacity-50 cursor-not-allowed",
         p.is_new && !blocked && "bg-emerald-50/80",
       )}
-      onClick={onSelect}
+      onMouseDown={(e) => {
+        // Tránh blur ô tìm trước khi click → mất sự kiện chọn
+        e.preventDefault();
+        onSelect();
+      }}
     >
       <div className="text-sm font-bold whitespace-normal break-words text-left leading-snug">
         {p.is_locked ? (
@@ -101,7 +105,7 @@ export function CatalogSuggestList({
   return (
     <div
       className={cn(
-        "absolute z-40 left-0 right-0 top-full mt-1",
+        "absolute z-[200] left-0 right-0 top-full mt-1",
         "w-full min-w-[min(100%,500px)] sm:min-w-[500px]",
         "max-h-[350px] overflow-y-auto",
         "rounded-md border bg-popover shadow-lg",

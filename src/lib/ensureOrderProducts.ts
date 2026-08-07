@@ -61,6 +61,20 @@ export async function ensureProductsForOrderLines(
     }
   }
 
+  // Case mismatch trong DB (vd tks2014 vs TKS2014) — .in exact miss
+  for (const s of slugs) {
+    if (slugToId.has(s)) continue;
+    const { data: fuzzy } = await supabase
+      .from("products")
+      .select("id, slug")
+      .ilike("slug", s)
+      .limit(5);
+    const hit = ((fuzzy as { id: string; slug: string }[] | null) || []).find(
+      (r) => normalizeOrderCodeText(r.slug) === s,
+    );
+    if (hit) slugToId.set(s, hit.id);
+  }
+
   const missing = [...seeds.values()].filter(
     (s) => !slugToId.has(normalizeOrderCodeText(s.slug)),
   );
@@ -90,16 +104,29 @@ export async function ensureProductsForOrderLines(
       continue;
     }
 
-    // Race / slug đã tồn tại → lấy lại
-    const { data: found } = await supabase
+    // Race / slug đã tồn tại (kể cả khác hoa thường) → lấy lại
+    const { data: foundExact } = await supabase
       .from("products")
       .select("id, slug")
       .eq("slug", c.slug)
       .maybeSingle();
 
-    if (found) {
-      const row = found as { id: string; slug: string };
+    if (foundExact) {
+      const row = foundExact as { id: string; slug: string };
       slugToId.set(normalizeOrderCodeText(row.slug), row.id);
+      continue;
+    }
+
+    const { data: foundFuzzy } = await supabase
+      .from("products")
+      .select("id, slug")
+      .ilike("slug", c.slug)
+      .limit(5);
+    const fuzzyHit = (
+      (foundFuzzy as { id: string; slug: string }[] | null) || []
+    ).find((r) => normalizeOrderCodeText(r.slug) === normalizeOrderCodeText(c.slug));
+    if (fuzzyHit) {
+      slugToId.set(normalizeOrderCodeText(fuzzyHit.slug), fuzzyHit.id);
       continue;
     }
 

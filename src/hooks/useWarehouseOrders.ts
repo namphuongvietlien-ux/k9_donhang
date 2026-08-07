@@ -487,8 +487,12 @@ export type UpdateOrderInput = {
 export function useWarehouseOrderMutations() {
   const qc = useQueryClient();
 
-  const invalidate = async () => {
-    await Promise.all([
+  /**
+   * Không await catalog — refetch ~hàng nghìn SP làm mutateAsync treo
+   * (nút Thêm mã quay spinner mãi / tưởng không hoạt động).
+   */
+  const invalidateOrders = () => {
+    void Promise.all([
       qc.invalidateQueries({ queryKey: ["warehouse-orders"] }),
       qc.invalidateQueries({ queryKey: ["warehouse-order"] }),
       qc.invalidateQueries({ queryKey: ["internal-transfers"] }),
@@ -496,9 +500,17 @@ export function useWarehouseOrderMutations() {
       qc.invalidateQueries({ queryKey: ["week-orders"] }),
       qc.invalidateQueries({ queryKey: ["stock-on-hand"] }),
       qc.invalidateQueries({ queryKey: ["dashboard-stats"] }),
-      qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] }),
-      qc.invalidateQueries({ queryKey: ["products"] }),
     ]);
+  };
+
+  const invalidateCatalogSoft = () => {
+    void qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] });
+    void qc.invalidateQueries({ queryKey: ["products"] });
+  };
+
+  const invalidate = () => {
+    invalidateOrders();
+    invalidateCatalogSoft();
   };
 
   /** GAS saveOrder — tạo phiếu pending + duplicate check ≤ 5 phút */
@@ -886,7 +898,8 @@ export function useWarehouseOrderMutations() {
         .from("order_items")
         .insert(row as never);
       if (error) {
-        if (/product_id/i.test(error.message || "") && pid) {
+        // Cột thiếu / FK / NOT NULL — thử lại không gắn product_id
+        if (/product_id/i.test(error.message || "")) {
           delete row.product_id;
           const { error: retryErr } = await supabase
             .from("order_items")
@@ -897,7 +910,11 @@ export function useWarehouseOrderMutations() {
         }
       }
     },
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidateOrders();
+      // Mã ngoài vừa upsert → soft refresh catalog (không chặn UI)
+      invalidateCatalogSoft();
+    },
   });
 
   const removeItem = useMutation({

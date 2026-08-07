@@ -300,7 +300,7 @@ function ManageOrdersPanel() {
       )}
 
       <Dialog open={!!detailId} onOpenChange={(o) => !o && setDetailId(null)}>
-        <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto overflow-x-visible">
           <DialogHeader>
             <DialogTitle>Chi tiết phiếu</DialogTitle>
           </DialogHeader>
