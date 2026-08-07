@@ -5,6 +5,11 @@ import {
   type ParsedCatalogStockImport,
 } from "@/lib/catalogStockImport";
 import { normalizeOrderCodeText } from "@/lib/packingWindows";
+import {
+  displayStockUnit,
+  normalizeUnitKey,
+  toStockUnitKey,
+} from "@/lib/stockKeys";
 
 const PAGE = 1000;
 
@@ -156,6 +161,10 @@ async function ensureProducts(
     unit: string;
     barcode: string | null;
     parentSku: string | null;
+    /** stockQ7: không ghi đè products.unit */
+    skipUnitPatch?: boolean;
+    /** ĐVT trên dòng file (để gắn barcode / unit_2) */
+    lineDvt?: string;
   }[] = [];
   const toCreateMap = new Map<
     string,
@@ -177,18 +186,21 @@ async function ensureProducts(
           id: existingId,
           name: line.tenHang,
           unit: line.dvt || "cái",
-          // Không ghi đè barcode bằng rỗng — tránh mất MV đã có
           barcode: line.maVach ? line.maVach : null,
           parentSku: line.parentSku || null,
         });
-      } else if (parsed.mode === "stockQ7" && line.maVach) {
-        toUpdate.push({
-          id: existingId,
-          name: line.tenHang || "",
-          unit: line.dvt || "cái",
-          barcode: line.maVach,
-          parentSku: null,
-        });
+      } else if (parsed.mode === "stockQ7") {
+        if (line.maVach || line.tenHang) {
+          toUpdate.push({
+            id: existingId,
+            name: line.tenHang || "",
+            unit: line.dvt || "cái",
+            barcode: line.maVach || null,
+            parentSku: null,
+            skipUnitPatch: true,
+            lineDvt: line.dvt || "",
+          });
+        }
       }
       continue;
     }
@@ -207,13 +219,43 @@ async function ensureProducts(
   for (let i = 0; i < toUpdate.length; i += 40) {
     const slice = toUpdate.slice(i, i + 40);
     await Promise.all(
-      slice.map((u) => {
+      slice.map(async (u) => {
         const patch: Record<string, unknown> = {};
         if (u.name) patch.name = u.name;
-        if (u.unit) patch.unit = u.unit;
-        if (u.barcode) patch.barcode = u.barcode;
+        if (u.unit && !u.skipUnitPatch) patch.unit = u.unit;
         if (u.parentSku) patch.parent_sku = u.parentSku;
-        if (!Object.keys(patch).length) return Promise.resolve();
+
+        if (u.barcode) {
+          const { data: prod } = await supabase
+            .from("products")
+            .select("unit, unit_2, barcode, barcode_2")
+            .eq("id", u.id)
+            .maybeSingle();
+          const p = prod as {
+            unit: string | null;
+            unit_2: string | null;
+            barcode: string | null;
+            barcode_2: string | null;
+          } | null;
+          const lineUnit = normalizeUnitKey(u.lineDvt || u.unit);
+          const u2 = normalizeUnitKey(p?.unit_2);
+          if (lineUnit && u2 && lineUnit === u2) {
+            patch.barcode_2 = u.barcode;
+          } else if (
+            !p?.barcode ||
+            !lineUnit ||
+            lineUnit === normalizeUnitKey(p.unit)
+          ) {
+            patch.barcode = u.barcode;
+          } else if (!p?.unit_2) {
+            patch.unit_2 = displayStockUnit(u.lineDvt || u.unit);
+            patch.barcode_2 = u.barcode;
+          } else {
+            patch.barcode = u.barcode;
+          }
+        }
+
+        if (!Object.keys(patch).length) return;
         return supabase
           .from("products")
           .update(patch as never)
@@ -308,20 +350,40 @@ async function upsertStockOnHand(
   warehouseId: string,
   slugToId: Map<string, string>,
 ): Promise<{ upserted: number }> {
-  const byProduct = new Map<string, number>();
+  /** Key = productId + unit_key — cùng mã khác ĐVT giữ riêng (GAS MH:|DV:) */
+  const byProductUnit = new Map<
+    string,
+    { product_id: string; unit: string; unit_key: string; quantity: number }
+  >();
 
   for (const line of parsed.lines) {
     if (line.errorNote || line.tonKho == null || line.tonKho < 0) continue;
     const pid = slugToId.get(normalizeOrderCodeText(line.productSlug));
     if (!pid) continue;
-    // Gộp nếu trùng mã
-    byProduct.set(pid, Math.round(line.tonKho));
+    const unit = displayStockUnit(line.dvt);
+    const unit_key = toStockUnitKey(unit);
+    const mapKey = `${pid}::${unit_key}`;
+    // Gộp chỉ khi trùng cả mã + ĐVT (cộng dồn như GAS addStockValueByCode)
+    const prev = byProductUnit.get(mapKey);
+    const qty = Math.max(0, Math.round(line.tonKho));
+    if (prev) {
+      prev.quantity = Math.max(0, prev.quantity + qty);
+    } else {
+      byProductUnit.set(mapKey, {
+        product_id: pid,
+        unit,
+        unit_key,
+        quantity: qty,
+      });
+    }
   }
 
-  const rows = [...byProduct.entries()].map(([product_id, quantity]) => ({
+  const rows = [...byProductUnit.values()].map((r) => ({
     warehouse_id: warehouseId,
-    product_id,
-    quantity: Math.max(0, Math.round(quantity)),
+    product_id: r.product_id,
+    unit: r.unit,
+    unit_key: r.unit_key,
+    quantity: r.quantity,
   }));
 
   if (!rows.length) {
@@ -331,14 +393,45 @@ async function upsertStockOnHand(
   let upserted = 0;
   for (let i = 0; i < rows.length; i += 250) {
     const slice = rows.slice(i, i + 250);
-    const { error } = await supabase
+    let { error } = await supabase
       .from("stock_on_hand" as never)
-      .upsert(slice as never, { onConflict: "warehouse_id,product_id" });
+      .upsert(slice as never, {
+        onConflict: "warehouse_id,product_id,unit_key",
+      });
+
+    // Chưa chạy migration unit_key → fallback unique cũ (mất ĐVT — cảnh báo)
+    if (error && /unit_key|no unique|ON CONFLICT/i.test(error.message || "")) {
+      const collapsed = new Map<string, (typeof slice)[0]>();
+      for (const r of slice) {
+        collapsed.set(r.product_id, {
+          warehouse_id: r.warehouse_id,
+          product_id: r.product_id,
+          quantity: r.quantity,
+          unit: r.unit,
+          unit_key: r.unit_key,
+        });
+      }
+      const legacy = [...collapsed.values()].map((r) => ({
+        warehouse_id: r.warehouse_id,
+        product_id: r.product_id,
+        quantity: r.quantity,
+      }));
+      const fb = await supabase
+        .from("stock_on_hand" as never)
+        .upsert(legacy as never, { onConflict: "warehouse_id,product_id" });
+      error = fb.error;
+      if (!error) {
+        console.warn(
+          "[stockQ7] DB chưa có unit_key — đã ghi theo mã hàng (thiếu tách ĐVT). Chạy scripts/sql-fix-stock-unit-key.sql",
+        );
+      }
+    }
+
     if (error) throw new Error(`Ghi tồn kho thất bại: ${error.message}`);
     upserted += slice.length;
   }
 
-  // Đồng bộ products.stock_quantity chỉ khi kho Q7 — batch song song lớn hơn
+  // Đồng bộ products.stock_quantity (Q7): tổng mọi ĐVT của mã (fallback ecommerce)
   const { data: wh } = await supabase
     .from("warehouses" as never)
     .select("code")
@@ -346,14 +439,22 @@ async function upsertStockOnHand(
     .maybeSingle();
 
   if ((wh as { code: string } | null)?.code === "Q7") {
-    for (let i = 0; i < rows.length; i += 80) {
-      const slice = rows.slice(i, i + 80);
+    const sumByProduct = new Map<string, number>();
+    for (const r of rows) {
+      sumByProduct.set(
+        r.product_id,
+        (sumByProduct.get(r.product_id) || 0) + r.quantity,
+      );
+    }
+    const syncRows = [...sumByProduct.entries()];
+    for (let i = 0; i < syncRows.length; i += 80) {
+      const slice = syncRows.slice(i, i + 80);
       await Promise.all(
-        slice.map((r) =>
+        slice.map(([product_id, quantity]) =>
           supabase
             .from("products")
-            .update({ stock_quantity: r.quantity } as never)
-            .eq("id", r.product_id),
+            .update({ stock_quantity: quantity } as never)
+            .eq("id", product_id),
         ),
       );
     }

@@ -363,9 +363,9 @@ export default function WarehouseOrderDetail({
     setNewUnit(dvt);
     const match = resolveUnitOption(addUnitOptions, dvt);
     if (match) {
+      // Bắt buộc sync MV theo ĐVT — giữ nguyên mã hàng + tên
       setNewBarcode(match.barcode);
-      setNewPrice(match.price ?? newPrice);
-      if (!newName.trim()) setNewName(match.name);
+      if (match.price > 0) setNewPrice(match.price);
     }
   };
 
@@ -709,9 +709,9 @@ export default function WarehouseOrderDetail({
                   ) : (
                     suggestions.map((p) => {
                       const ton =
-                        getQty(p.slug) ??
-                        getQty(p.barcode || "") ??
-                        getQty(p.barcode_2 || "");
+                        getQty(p.slug, p.unit) ??
+                        getQty(p.barcode || "", p.unit) ??
+                        getQty(p.barcode_2 || "", p.unit_2);
                       return (
                         <button
                           key={p.id}
@@ -749,8 +749,15 @@ export default function WarehouseOrderDetail({
             {newSlug ? (
               <div className="space-y-1">
                 <Label className="text-xs">ĐVT</Label>
-                {addUnitOptions.length > 1 ? (
-                  <Select value={newUnit} onValueChange={onAddUnitChange}>
+                {addUnitOptions.length > 0 ? (
+                  <Select
+                    value={
+                      resolveUnitOption(addUnitOptions, newUnit)?.unit ||
+                      addUnitOptions[0]?.unit ||
+                      newUnit
+                    }
+                    onValueChange={onAddUnitChange}
+                  >
                     <SelectTrigger className="w-28 h-10">
                       <SelectValue placeholder="ĐVT" />
                     </SelectTrigger>
@@ -758,15 +765,17 @@ export default function WarehouseOrderDetail({
                       {addUnitOptions.map((u) => (
                         <SelectItem key={u.unit} value={u.unit}>
                           {u.unit}
+                          {u.barcode ? ` · ${u.barcode}` : ""}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 ) : (
                   <Input
-                    className="w-24 h-10 bg-muted"
+                    className="w-24 h-10"
                     value={newUnit}
-                    readOnly
+                    onChange={(e) => setNewUnit(e.target.value)}
+                    placeholder="ĐVT"
                   />
                 )}
               </div>
@@ -849,9 +858,9 @@ export default function WarehouseOrderDetail({
               const packedVal = packed[it.id] ?? it.qty_packed ?? null;
               const mismatch = qtyMismatchKind(req, packedVal);
               const ton =
-                getQty(it.product_slug) ??
-                getQty(it.barcode) ??
-                getQty(it.product_name);
+                getQty(it.product_slug, it.unit) ??
+                getQty(it.barcode, it.unit) ??
+                getQty(it.product_name, it.unit);
               return (
                 <TableRow
                   key={it.id}

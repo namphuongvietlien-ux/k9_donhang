@@ -63,7 +63,7 @@ export const WEEKDAY_NAMES_VI = [
 export const DUP_TIME_MINUTES = 60;
 export const DUP_PRESAVE_MINUTES = 5;
 
-/** GAS STORE_MAP short codes */
+/** GAS STORE_MAP — code nội bộ (khớp warehouses.code) */
 export const STORE_SHORT_CODES: Record<string, string> = {
   "Kho Địa điểm kinh doanh Q7": "Q7",
   "Kho Địa điểm kinh doanh 01": "Q4_178",
@@ -72,6 +72,17 @@ export const STORE_SHORT_CODES: Record<string, string> = {
   "Kho Địa điểm kinh doanh 04": "Q5",
   "Kho Địa điểm kinh doanh 05": "Q1",
   "Kho Địa điểm kinh doanh 06": "Q4_275",
+};
+
+/** Nhãn hiển thị UI — KD 01 = Q4 Mới, KD 06 = Q4 Cũ (không hiện Q4_178/Q4_275) */
+export const STORE_DISPLAY_LABELS: Record<string, string> = {
+  "Kho Địa điểm kinh doanh Q7": "Q7",
+  "Kho Địa điểm kinh doanh 01": "Q4 Mới",
+  "Kho Địa điểm kinh doanh 02": "Q8",
+  "Kho Địa điểm kinh doanh 03": "PH",
+  "Kho Địa điểm kinh doanh 04": "Q5",
+  "Kho Địa điểm kinh doanh 05": "Q1",
+  "Kho Địa điểm kinh doanh 06": "Q4 Cũ",
 };
 
 // ── Date primitives (utils_helpers) ──────────────────────────
@@ -589,9 +600,13 @@ export function attachDuplicateSuspects<T extends DuplicateOrderLike>(
   return list;
 }
 
-/** Short warehouse label like GAS formatShortStoreLabel */
+/** Short warehouse label like GAS — UI hiện Q4 Cũ / Q4 Mới (không Q4_178/Q4_275) */
 export function formatShortStoreLabel(storeName: string): string {
-  const normalized = String(storeName || "")
+  const raw = String(storeName || "").trim();
+  if (!raw) return "—";
+  if (STORE_DISPLAY_LABELS[raw]) return STORE_DISPLAY_LABELS[raw];
+
+  const normalized = raw
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -601,7 +616,22 @@ export function formatShortStoreLabel(storeName: string): string {
   if (normalized.includes("phamhung") || normalized === "ph") return "PH";
   if (normalized.includes("q5") || normalized.includes("quan5")) return "Q5";
   if (normalized.includes("q1") || normalized.includes("quan1")) return "Q1";
-  if (normalized.includes("178")) return "Q4_178";
-  if (normalized.includes("275")) return "Q4_275";
-  return storeName.slice(0, 8).toUpperCase() || "—";
+  // KD 01 / 178 Hoàng Diệu = Q4 Mới · KD 06 / 275 = Q4 Cũ
+  if (
+    normalized.includes("178") ||
+    normalized.includes("kinhdoanh01") ||
+    normalized === "q4_178" ||
+    normalized.includes("q4moi")
+  ) {
+    return "Q4 Mới";
+  }
+  if (
+    normalized.includes("275") ||
+    normalized.includes("kinhdoanh06") ||
+    normalized === "q4_275" ||
+    normalized.includes("q4cu")
+  ) {
+    return "Q4 Cũ";
+  }
+  return raw.slice(0, 8).toUpperCase() || "—";
 }

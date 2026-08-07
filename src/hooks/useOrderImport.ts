@@ -48,20 +48,39 @@ async function loadQ7StockMap(): Promise<{
   const bySlug = new Map<string, number>();
   if (!warehouseId) return { warehouseId, bySlug };
 
-  const { data: stock } = await supabase
-    .from("stock_on_hand" as never)
-    .select("quantity, products:product_id ( slug, name )")
-    .eq("warehouse_id", warehouseId);
+  let stock: unknown[] | null = null;
+  {
+    const full = await supabase
+      .from("stock_on_hand" as never)
+      .select("quantity, unit, unit_key, products:product_id ( slug, name )")
+      .eq("warehouse_id", warehouseId);
+    if (full.error && /unit_key|column.*unit/i.test(full.error.message || "")) {
+      const fb = await supabase
+        .from("stock_on_hand" as never)
+        .select("quantity, products:product_id ( slug, name )")
+        .eq("warehouse_id", warehouseId);
+      if (fb.error) throw fb.error;
+      stock = fb.data as unknown[] | null;
+    } else if (full.error) {
+      throw full.error;
+    } else {
+      stock = full.data as unknown[] | null;
+    }
+  }
 
   type Row = {
     quantity: number;
+    unit?: string | null;
+    unit_key?: string | null;
     products: { slug: string | null; name: string } | null;
   };
   for (const r of (stock as Row[] | null) ?? []) {
-    const key = normalizeOrderCodeText(
+    const slug = normalizeOrderCodeText(
       r.products?.slug || r.products?.name || "",
     );
-    if (key) bySlug.set(key, r.quantity);
+    if (!slug) continue;
+    // Cộng dồn nếu nhiều ĐVT (preview import không tách ĐVT)
+    bySlug.set(slug, (bySlug.get(slug) || 0) + (Number(r.quantity) || 0));
   }
   return { warehouseId, bySlug };
 }

@@ -1130,7 +1130,7 @@ export default function BanKemDvPanel() {
                   const ton =
                     l.lineKind === "DV"
                       ? null
-                      : getQty(l.maHang) ?? getQty(l.maVach);
+                      : getQty(l.maHang, l.dvt) ?? getQty(l.maVach, l.dvt);
                   return (
                     <TableRow key={l.key} className={excelTr}>
                       <TableCell
@@ -1167,24 +1167,34 @@ export default function BanKemDvPanel() {
                         {l.tenHang}
                       </TableCell>
                       <TableCell className={excelTd}>
-                        {l.unitOptions.length > 1 ? (
+                        {l.unitOptions.length > 0 ? (
                           <Select
-                            value={l.dvt}
+                            value={
+                              resolveUnitOption(l.unitOptions, l.dvt)?.unit ||
+                              l.unitOptions[0]?.unit ||
+                              l.dvt
+                            }
                             onValueChange={(v) => setLineUnit(l.key, v)}
                           >
                             <SelectTrigger className="h-7 text-xs">
-                              <SelectValue />
+                              <SelectValue placeholder="ĐVT" />
                             </SelectTrigger>
                             <SelectContent>
                               {l.unitOptions.map((u) => (
                                 <SelectItem key={u.unit} value={u.unit}>
                                   {u.unit}
+                                  {u.barcode ? ` · ${u.barcode}` : ""}
                                 </SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
                         ) : (
-                          <span className="text-xs font-medium">{l.dvt}</span>
+                          <Input
+                            className="h-7 text-xs p-1"
+                            value={l.dvt}
+                            onChange={(e) => setLineUnit(l.key, e.target.value)}
+                            placeholder="ĐVT"
+                          />
                         )}
                       </TableCell>
                       <TableCell

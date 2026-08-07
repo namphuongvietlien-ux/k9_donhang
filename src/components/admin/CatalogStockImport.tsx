@@ -150,7 +150,7 @@ export default function CatalogStockImport({
       const msg =
         res.mode === "catalogFast"
           ? `Đã nhập khẩu danh mục: tạo ${res.productsCreated} mã, cập nhật ${res.productsUpdated} mã (như GAS catalogFast → Data_Excel).`
-          : `Đã import tồn: ${res.stockUpserted} dòng stock_on_hand (như GAS stockQ7 → TON_Q7), tạo thêm ${res.productsCreated} mã hàng.`;
+          : `Đã import tồn: ${res.stockUpserted} dòng stock_on_hand theo mã+ĐVT (như GAS MH:|DV:), tạo thêm ${res.productsCreated} mã hàng.`;
       toast({ title: "Import thành công", description: msg });
       setParsed(null);
       setFileName("");

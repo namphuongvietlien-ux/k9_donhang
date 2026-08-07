@@ -16,6 +16,7 @@ import {
 import { checkDuplicateBeforeSave } from "@/hooks/useOrderImport";
 import { enrichWarehouseMeta, warehouseShortLabel } from "@/lib/warehouseMeta";
 import { notifyWarehouseEvent } from "@/lib/telegramNotify";
+import { toStockUnitKey } from "@/lib/stockKeys";
 
 export { warehouseShortLabel };
 
@@ -878,6 +879,7 @@ export function useWarehouseOrderMutations() {
         itemId: string;
         qtyReceived: number;
         productSlug: string | null;
+        unit?: string | null;
       }[];
       sourceWarehouseId: string;
     }) => {
@@ -909,22 +911,50 @@ export function useWarehouseOrderMutations() {
 
         const { data: product } = await supabase
           .from("products")
-          .select("id, stock_quantity")
+          .select("id, stock_quantity, unit, unit_2")
           .eq("slug", line.productSlug)
           .maybeSingle();
 
         if (!product) continue;
         const productId = (product as { id: string }).id;
+        const unitLabel =
+          String(line.unit || "").trim() ||
+          String((product as { unit: string | null }).unit || "").trim() ||
+          "cái";
+        const unitKey = toStockUnitKey(unitLabel);
 
-        const { data: stock } = await supabase
+        const withUnit = await supabase
           .from("stock_on_hand" as never)
-          .select("id, quantity")
+          .select("id, quantity, unit_key")
           .eq("warehouse_id", input.sourceWarehouseId)
           .eq("product_id", productId)
+          .eq("unit_key", unitKey)
           .maybeSingle();
 
-        const current =
-          (stock as { id: string; quantity: number } | null)?.quantity ?? 0;
+        let stock = withUnit.data as {
+          id: string;
+          quantity: number;
+          unit_key?: string;
+        } | null;
+        const stockErr = withUnit.error;
+
+        if (
+          (stockErr && /unit_key|column/i.test(stockErr.message || "")) ||
+          (!stock && !stockErr)
+        ) {
+          const fb = await supabase
+            .from("stock_on_hand" as never)
+            .select("id, quantity")
+            .eq("warehouse_id", input.sourceWarehouseId)
+            .eq("product_id", productId)
+            .limit(1)
+            .maybeSingle();
+          if (!fb.error) {
+            stock = fb.data as { id: string; quantity: number } | null;
+          }
+        }
+
+        const current = stock?.quantity ?? 0;
         const next = Math.max(0, current - deduct);
 
         if (stock) {
@@ -934,15 +964,26 @@ export function useWarehouseOrderMutations() {
               quantity: next,
               updated_at: new Date().toISOString(),
             } as never)
-            .eq("id", (stock as { id: string }).id);
+            .eq("id", stock.id);
           if (error) throw error;
         } else {
           const { error } = await supabase.from("stock_on_hand" as never).insert({
             warehouse_id: input.sourceWarehouseId,
             product_id: productId,
             quantity: 0,
+            unit: unitLabel,
+            unit_key: unitKey,
           } as never);
-          if (error) throw error;
+          if (error && /unit_key|column/i.test(error.message || "")) {
+            const fb = await supabase.from("stock_on_hand" as never).insert({
+              warehouse_id: input.sourceWarehouseId,
+              product_id: productId,
+              quantity: 0,
+            } as never);
+            if (fb.error) throw fb.error;
+          } else if (error) {
+            throw error;
+          }
         }
 
         const { data: wh } = await supabase
@@ -951,9 +992,18 @@ export function useWarehouseOrderMutations() {
           .eq("id", input.sourceWarehouseId)
           .maybeSingle();
         if ((wh as { code: string } | null)?.code === "Q7") {
+          const { data: allUnits } = await supabase
+            .from("stock_on_hand" as never)
+            .select("quantity")
+            .eq("warehouse_id", input.sourceWarehouseId)
+            .eq("product_id", productId);
+          const sum = ((allUnits as { quantity: number }[] | null) ?? []).reduce(
+            (s, r) => s + (Number(r.quantity) || 0),
+            0,
+          );
           await supabase
             .from("products")
-            .update({ stock_quantity: next } as never)
+            .update({ stock_quantity: Math.max(0, sum) } as never)
             .eq("id", productId);
         }
       }

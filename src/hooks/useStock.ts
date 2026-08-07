@@ -2,6 +2,11 @@ import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { normalizeOrderCodeText } from "@/lib/packingWindows";
+import {
+  normalizeUnitKey,
+  stockCompositeKey,
+  stockUnitSuffix,
+} from "@/lib/stockKeys";
 
 export interface StockOnHandRow {
   productId: string;
@@ -10,7 +15,11 @@ export interface StockOnHandRow {
   barcode: string | null;
   barcode2: string | null;
   quantity: number;
+  /** ĐVT của dòng tồn (từ stock_on_hand.unit) */
   unit: string | null;
+  unitKey: string;
+  productUnit: string | null;
+  productUnit2: string | null;
   warehouseId: string;
   source: "stock_on_hand" | "products";
 }
@@ -30,6 +39,7 @@ type ProductLite = {
   name: string;
   slug: string | null;
   unit: string | null;
+  unit_2?: string | null;
   barcode: string | null;
   barcode_2?: string | null;
   stock_quantity?: number | null;
@@ -39,12 +49,16 @@ type FlatStock = {
   product_id: string;
   quantity: number;
   warehouse_id: string;
+  unit?: string | null;
+  unit_key?: string | null;
 };
 
 type NestedStock = {
   product_id: string;
   quantity: number;
   warehouse_id: string;
+  unit?: string | null;
+  unit_key?: string | null;
   products: ProductLite | ProductLite[] | null;
 };
 
@@ -53,6 +67,17 @@ function firstProduct(
 ): ProductLite | null {
   if (!p) return null;
   return Array.isArray(p) ? p[0] || null : p;
+}
+
+function resolveUnitFields(
+  sohUnit: string | null | undefined,
+  sohUnitKey: string | null | undefined,
+  productUnit: string | null | undefined,
+): { unit: string; unitKey: string } {
+  const unit = String(sohUnit || productUnit || "cái").trim() || "cái";
+  const unitKey =
+    normalizeUnitKey(sohUnitKey) || normalizeUnitKey(unit) || "cai";
+  return { unit, unitKey };
 }
 
 /**
@@ -64,14 +89,29 @@ async function fetchAllStockOnHandFlat(
   const all: FlatStock[] = [];
   for (let from = 0; ; from += PAGE) {
     const to = from + PAGE - 1;
-    const { data, error } = await supabase
+    const withUnit = await supabase
       .from("stock_on_hand" as never)
-      .select("product_id, quantity, warehouse_id")
+      .select("product_id, quantity, warehouse_id, unit, unit_key")
       .eq("warehouse_id", warehouseId)
       .order("product_id", { ascending: true })
       .range(from, to);
-    if (error) throw error;
-    const chunk = (data as FlatStock[] | null) ?? [];
+
+    if (withUnit.error && /unit_key|column.*unit/i.test(withUnit.error.message || "")) {
+      const legacy = await supabase
+        .from("stock_on_hand" as never)
+        .select("product_id, quantity, warehouse_id")
+        .eq("warehouse_id", warehouseId)
+        .order("product_id", { ascending: true })
+        .range(from, to);
+      if (legacy.error) throw legacy.error;
+      const chunk = (legacy.data as FlatStock[] | null) ?? [];
+      all.push(...chunk);
+      if (chunk.length < PAGE) break;
+      continue;
+    }
+
+    if (withUnit.error) throw withUnit.error;
+    const chunk = (withUnit.data as FlatStock[] | null) ?? [];
     all.push(...chunk);
     if (chunk.length < PAGE) break;
   }
@@ -92,8 +132,10 @@ async function fetchAllStockOnHandNested(
           product_id,
           quantity,
           warehouse_id,
+          unit,
+          unit_key,
           products:product_id (
-            id, name, slug, unit, barcode, barcode_2, stock_quantity
+            id, name, slug, unit, unit_2, barcode, barcode_2, stock_quantity
           )
         `,
       )
@@ -101,10 +143,8 @@ async function fetchAllStockOnHandNested(
       .order("product_id", { ascending: true })
       .range(from, to);
 
-    if (
-      full.error &&
-      /barcode_2|stock_quantity/i.test(full.error.message || "")
-    ) {
+    const errMsg = full.error?.message || "";
+    if (full.error && /unit_key|barcode_2|unit_2|stock_quantity/i.test(errMsg)) {
       const fallback = await supabase
         .from("stock_on_hand" as never)
         .select(
@@ -122,6 +162,7 @@ async function fetchAllStockOnHandNested(
       const chunk = (fallback.data as NestedStock[] | null) ?? [];
       for (const r of chunk) {
         const p = firstProduct(r.products);
+        const u = resolveUnitFields(r.unit, r.unit_key, p?.unit);
         all.push({
           productId: r.product_id,
           productName: p?.name ?? "Sản phẩm",
@@ -129,7 +170,10 @@ async function fetchAllStockOnHandNested(
           barcode: p?.barcode ?? null,
           barcode2: null,
           quantity: clampStockQty(r.quantity),
-          unit: p?.unit ?? null,
+          unit: u.unit,
+          unitKey: u.unitKey,
+          productUnit: p?.unit ?? null,
+          productUnit2: null,
           warehouseId: r.warehouse_id,
           source: "stock_on_hand",
         });
@@ -142,6 +186,7 @@ async function fetchAllStockOnHandNested(
     const chunk = (full.data as NestedStock[] | null) ?? [];
     for (const r of chunk) {
       const p = firstProduct(r.products);
+      const u = resolveUnitFields(r.unit, r.unit_key, p?.unit);
       all.push({
         productId: r.product_id,
         productName: p?.name ?? "Sản phẩm",
@@ -149,7 +194,10 @@ async function fetchAllStockOnHandNested(
         barcode: p?.barcode ?? null,
         barcode2: p?.barcode_2 ?? null,
         quantity: clampStockQty(r.quantity),
-        unit: p?.unit ?? null,
+        unit: u.unit,
+        unitKey: u.unitKey,
+        productUnit: p?.unit ?? null,
+        productUnit2: p?.unit_2 ?? null,
         warehouseId: r.warehouse_id,
         source: "stock_on_hand",
       });
@@ -170,12 +218,12 @@ async function fetchProductsByIds(
     const slice = unique.slice(i, i + ID_CHUNK);
     const full = await supabase
       .from("products")
-      .select("id, name, slug, unit, barcode, barcode_2, stock_quantity")
+      .select("id, name, slug, unit, unit_2, barcode, barcode_2, stock_quantity")
       .in("id", slice);
 
     if (
       full.error &&
-      /barcode_2|stock_quantity/i.test(full.error.message || "")
+      /barcode_2|unit_2|stock_quantity/i.test(full.error.message || "")
     ) {
       const fb = await supabase
         .from("products")
@@ -201,13 +249,13 @@ async function fetchProductStockFallback(): Promise<StockOnHandRow[]> {
     const to = from + PAGE - 1;
     const full = await supabase
       .from("products")
-      .select("id, name, slug, unit, barcode, barcode_2, stock_quantity")
+      .select("id, name, slug, unit, unit_2, barcode, barcode_2, stock_quantity")
       .eq("is_active", true)
       .not("stock_quantity", "is", null)
       .order("id", { ascending: true })
       .range(from, to);
 
-    if (full.error && /barcode_2/i.test(full.error.message || "")) {
+    if (full.error && /barcode_2|unit_2/i.test(full.error.message || "")) {
       const fallback = await supabase
         .from("products")
         .select("id, name, slug, unit, barcode, stock_quantity")
@@ -218,6 +266,7 @@ async function fetchProductStockFallback(): Promise<StockOnHandRow[]> {
       if (fallback.error) throw fallback.error;
       const chunk = (fallback.data as ProductLite[] | null) ?? [];
       for (const p of chunk) {
+        const u = resolveUnitFields(p.unit, null, p.unit);
         all.push({
           productId: p.id,
           productName: p.name,
@@ -225,7 +274,10 @@ async function fetchProductStockFallback(): Promise<StockOnHandRow[]> {
           barcode: p.barcode,
           barcode2: null,
           quantity: clampStockQty(p.stock_quantity),
-          unit: p.unit,
+          unit: u.unit,
+          unitKey: u.unitKey,
+          productUnit: p.unit,
+          productUnit2: null,
           warehouseId: "",
           source: "products",
         });
@@ -237,6 +289,7 @@ async function fetchProductStockFallback(): Promise<StockOnHandRow[]> {
     if (full.error) throw full.error;
     const chunk = (full.data as ProductLite[] | null) ?? [];
     for (const p of chunk) {
+      const u = resolveUnitFields(p.unit, null, p.unit);
       all.push({
         productId: p.id,
         productName: p.name,
@@ -244,7 +297,10 @@ async function fetchProductStockFallback(): Promise<StockOnHandRow[]> {
         barcode: p.barcode,
         barcode2: p.barcode_2 || null,
         quantity: clampStockQty(p.stock_quantity),
-        unit: p.unit,
+        unit: u.unit,
+        unitKey: u.unitKey,
+        productUnit: p.unit,
+        productUnit2: p.unit_2 || null,
         warehouseId: "",
         source: "products",
       });
@@ -266,20 +322,24 @@ async function loadStockForWarehouse(
       const products = await fetchProductsByIds(flat.map((r) => r.product_id));
       fromSoh = flat.map((r) => {
         const p = products.get(r.product_id);
+        const u = resolveUnitFields(r.unit, r.unit_key, p?.unit);
         return {
           productId: r.product_id,
           productName: p?.name ?? "Sản phẩm",
           productSlug: p?.slug ?? null,
           barcode: p?.barcode ?? null,
           barcode2: p?.barcode_2 ?? null,
-            quantity: clampStockQty(r.quantity),
-            unit: p?.unit ?? null,
-            warehouseId: r.warehouse_id,
-            source: "stock_on_hand" as const,
-          };
-        });
-      }
-    } catch (e) {
+          quantity: clampStockQty(r.quantity),
+          unit: u.unit,
+          unitKey: u.unitKey,
+          productUnit: p?.unit ?? null,
+          productUnit2: p?.unit_2 ?? null,
+          warehouseId: r.warehouse_id,
+          source: "stock_on_hand" as const,
+        };
+      });
+    }
+  } catch (e) {
     sohError = e instanceof Error ? e : new Error(String(e));
     try {
       fromSoh = await fetchAllStockOnHandNested(warehouseId);
@@ -293,7 +353,6 @@ async function loadStockForWarehouse(
   try {
     fromProducts = await fetchProductStockFallback();
   } catch {
-    // Không làm mất dữ liệu SOH nếu fallback lỗi
     fromProducts = [];
   }
 
@@ -304,6 +363,7 @@ async function loadStockForWarehouse(
   if (!fromSoh.length) return fromProducts;
   if (!fromProducts.length) return fromSoh;
 
+  // Filler chỉ khi chưa có bất kỳ dòng SOH nào cho product (mọi ĐVT)
   const sohIds = new Set(fromSoh.map((r) => r.productId));
   const sohSlugs = new Set(
     fromSoh
@@ -319,29 +379,148 @@ async function loadStockForWarehouse(
   return [...fromSoh, ...fillers];
 }
 
-function indexStock(rows: StockOnHandRow[]): Map<string, StockOnHandRow> {
-  const map = new Map<string, StockOnHandRow>();
-  const put = (key: string | null | undefined, row: StockOnHandRow) => {
+type StockIndex = {
+  /** CODE|DV:unit → row */
+  byComposite: Map<string, StockOnHandRow>;
+  /** CODE bare → rows (mọi ĐVT) */
+  byBare: Map<string, StockOnHandRow[]>;
+};
+
+function indexStock(rows: StockOnHandRow[]): StockIndex {
+  const byComposite = new Map<string, StockOnHandRow>();
+  const byBare = new Map<string, StockOnHandRow[]>();
+
+  const putComposite = (key: string | null | undefined, row: StockOnHandRow) => {
     const k = normalizeOrderCodeText(key || "");
     if (!k) return;
-    const prev = map.get(k);
+    const prev = byComposite.get(k);
     if (prev && prev.source === "stock_on_hand" && row.source === "products") {
       return;
     }
-    map.set(k, row);
+    byComposite.set(k, row);
+  };
+
+  const pushBare = (code: string | null | undefined, row: StockOnHandRow) => {
+    const k = normalizeOrderCodeText(code || "");
+    if (!k) return;
+    const list = byBare.get(k) || [];
+    // Tránh trùng cùng product+unit
+    if (
+      !list.some(
+        (r) =>
+          r.productId === row.productId &&
+          r.unitKey === row.unitKey &&
+          r.source === row.source,
+      )
+    ) {
+      list.push(row);
+      byBare.set(k, list);
+    }
   };
 
   for (const r of rows) {
-    put(r.productId, r);
-    put(r.productSlug, r);
-    put(r.barcode, r);
-    put(r.barcode2, r);
+    const suffix = stockUnitSuffix(r.unitKey || r.unit);
+    const codes = [
+      r.productId,
+      r.productSlug,
+      // Barcode khớp ĐVT: unit chính → barcode, unit_2 → barcode_2
+      normalizeUnitKey(r.unit) === normalizeUnitKey(r.productUnit2)
+        ? r.barcode2
+        : r.barcode,
+      r.barcode,
+      r.barcode2,
+    ];
+
+    for (const code of codes) {
+      if (!code) continue;
+      putComposite(stockCompositeKey(code, r.unit), r);
+      if (suffix) {
+        // Alias với unitKey đã chuẩn
+        putComposite(normalizeOrderCodeText(code) + suffix, r);
+      }
+      pushBare(code, r);
+    }
+
+    // Bare alias: ưu tiên ĐVT chính của SP; nếu không có thì vẫn ghi nếu chưa có
+    const primaryKey = normalizeUnitKey(r.productUnit) || r.unitKey;
+    if (r.unitKey === primaryKey || !primaryKey) {
+      putComposite(r.productSlug, r);
+      putComposite(r.barcode, r);
+      putComposite(r.productId, r);
+    }
   }
-  return map;
+
+  return { byComposite, byBare };
+}
+
+/**
+ * Tra cứu tồn theo mã + ĐVT (GAS lookupStockByPrefixCode_).
+ * Có ĐVT → ưu tiên khớp ĐVT; miss → fallback bare / cộng biến thể.
+ */
+function lookupQty(
+  index: StockIndex,
+  code: string | null | undefined,
+  unit?: string | null,
+): number | null {
+  if (!code) return null;
+  const bare = normalizeOrderCodeText(code);
+  if (!bare) return null;
+  const unitKey = normalizeUnitKey(unit);
+
+  if (unitKey) {
+    const hit = index.byComposite.get(bare + stockUnitSuffix(unitKey));
+    if (hit) return hit.quantity;
+    // Fallback bare (1 dòng không gắn ĐVT hoặc alias primary)
+    const bareHit = index.byComposite.get(bare);
+    if (bareHit) return bareHit.quantity;
+    // Cộng mọi biến thể cùng mã nếu chỉ có rows trong byBare
+    const list = index.byBare.get(bare);
+    if (list?.length) {
+      // Nếu có đúng 1 ĐVT khớp sau normalize — lấy cái đó; else sum? GAS: fallback bare then sum
+      const exact = list.find((r) => r.unitKey === unitKey);
+      if (exact) return exact.quantity;
+      return list.reduce((s, r) => s + r.quantity, 0);
+    }
+    return null;
+  }
+
+  // Không có ĐVT: ưu tiên alias bare; không thì cộng mọi ĐVT
+  const bareHit = index.byComposite.get(bare);
+  if (bareHit) return bareHit.quantity;
+  const list = index.byBare.get(bare);
+  if (!list?.length) return null;
+  if (list.length === 1) return list[0].quantity;
+  return list.reduce((s, r) => s + r.quantity, 0);
+}
+
+function lookupRow(
+  index: StockIndex,
+  code: string | null | undefined,
+  unit?: string | null,
+): StockOnHandRow | null {
+  if (!code) return null;
+  const bare = normalizeOrderCodeText(code);
+  if (!bare) return null;
+  const unitKey = normalizeUnitKey(unit);
+
+  if (unitKey) {
+    const hit = index.byComposite.get(bare + stockUnitSuffix(unitKey));
+    if (hit) return hit;
+  }
+  const bareHit = index.byComposite.get(bare);
+  if (bareHit) return bareHit;
+  const list = index.byBare.get(bare);
+  if (!list?.length) return null;
+  if (unitKey) {
+    const exact = list.find((r) => r.unitKey === unitKey);
+    if (exact) return exact;
+  }
+  return list[0];
 }
 
 /**
  * Port of GAS getStockMapForStore — tải đủ tồn Q7 để soạn hàng.
+ * Key = mã hàng + ĐVT.
  */
 export function useStock(warehouseId?: string | null, enabled = true) {
   const query = useQuery({
@@ -352,28 +531,23 @@ export function useStock(warehouseId?: string | null, enabled = true) {
     queryFn: () => loadStockForWarehouse(warehouseId!),
   });
 
-  const byKey = useMemo(
-    () => indexStock(query.data ?? []),
-    [query.data],
-  );
+  const index = useMemo(() => indexStock(query.data ?? []), [query.data]);
 
   const getQty = useCallback(
-    (slugOrIdOrBarcodeOrName: string | null | undefined): number | null => {
-      if (!slugOrIdOrBarcodeOrName) return null;
-      const hit = byKey.get(normalizeOrderCodeText(slugOrIdOrBarcodeOrName));
-      return hit ? hit.quantity : null;
-    },
-    [byKey],
+    (
+      slugOrIdOrBarcodeOrName: string | null | undefined,
+      unit?: string | null,
+    ): number | null => lookupQty(index, slugOrIdOrBarcodeOrName, unit),
+    [index],
   );
 
   const getRow = useCallback(
     (
       slugOrIdOrBarcodeOrName: string | null | undefined,
-    ): StockOnHandRow | null => {
-      if (!slugOrIdOrBarcodeOrName) return null;
-      return byKey.get(normalizeOrderCodeText(slugOrIdOrBarcodeOrName)) ?? null;
-    },
-    [byKey],
+      unit?: string | null,
+    ): StockOnHandRow | null =>
+      lookupRow(index, slugOrIdOrBarcodeOrName, unit),
+    [index],
   );
 
   const sohCount = useMemo(
@@ -383,7 +557,7 @@ export function useStock(warehouseId?: string | null, enabled = true) {
 
   return {
     rows: query.data ?? [],
-    bySlug: byKey,
+    bySlug: index.byComposite,
     getQty,
     getRow,
     loading: query.isLoading || query.isFetching,

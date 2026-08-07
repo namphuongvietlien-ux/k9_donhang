@@ -13,14 +13,14 @@ export interface Warehouse {
   print_name?: string | null;
 }
 
-/** Nhãn cột / in: Q4 Cũ, Q4 Mới… (không dùng Q4_178). Ưu tiên short_name. */
+/** Nhãn cột / in: Q4 Cũ, Q4 Mới… (không dùng Q4_178 / Q4_275). */
 export function warehouseLabel(
   w: Pick<Warehouse, "code" | "short_name" | "print_name" | "name">,
 ): string {
+  const enriched = enrichWarehouseMeta(w);
   return (
-    String(w.short_name || "").trim() ||
-    String(w.print_name || "").trim() ||
-    // Không ưu tiên name dài "Kho Địa điểm…" — hiện code chỉ khi thiếu nhãn
+    String(enriched?.short_name || "").trim() ||
+    String(enriched?.print_name || "").trim() ||
     w.code
   );
 }

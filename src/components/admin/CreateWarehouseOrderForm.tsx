@@ -308,7 +308,7 @@ const CreateWarehouseOrderForm = forwardRef<
           quantity: 1,
           productId: picked.productId,
           price: picked.price,
-          stockQty: getQty(ma),
+          stockQty: getQty(ma, picked.unit),
         },
         ...prev,
       ];
@@ -413,7 +413,7 @@ const CreateWarehouseOrderForm = forwardRef<
           dvt: match.unit,
           maVach: match.barcode,
           productId: match.productId,
-          tenHang: match.name || l.tenHang,
+          // Giữ nguyên tên hàng / mã hàng — chỉ sync MV + giá
           price: match.price || l.price,
         };
       }),
@@ -667,7 +667,10 @@ const CreateWarehouseOrderForm = forwardRef<
               </div>
             ) : (
               suggestions.map((p) => {
-                const ton = getQty(p.slug) ?? getQty(p.barcode || "") ?? getQty(p.barcode_2 || "");
+                const ton =
+                  getQty(p.slug, p.unit) ??
+                  getQty(p.barcode || "", p.unit) ??
+                  getQty(p.barcode_2 || "", p.unit_2);
                 const units = getSkuUnitOptions(skuUnitIndex, p.slug);
                 const dvtLabel =
                   units.map((u) => u.unit).join("/") || p.unit || "cái";
@@ -789,9 +792,10 @@ const CreateWarehouseOrderForm = forwardRef<
                 lines.map((l, idx) => {
                   const loi = isLoiMaSku(l.maHang);
                   const hasUnits = l.unitOptions.length > 0;
-                  const unitLocked = l.unitOptions.length === 1;
                   const tonLive =
-                    getQty(l.maHang) ?? getQty(l.maVach) ?? l.stockQty;
+                    getQty(l.maHang, l.dvt) ??
+                    getQty(l.maVach, l.dvt) ??
+                    l.stockQty;
                   return (
                     <TableRow
                       key={l.key}
@@ -841,13 +845,13 @@ const CreateWarehouseOrderForm = forwardRef<
                             }
                             placeholder="ĐVT"
                           />
-                        ) : unitLocked ? (
-                          <div className="h-7 px-1.5 flex items-center rounded-sm border bg-slate-100 text-[13px] font-medium">
-                            {l.dvt}
-                          </div>
                         ) : (
                           <Select
-                            value={l.dvt}
+                            value={
+                              resolveUnitOption(l.unitOptions, l.dvt)?.unit ||
+                              l.unitOptions[0]?.unit ||
+                              l.dvt
+                            }
                             onValueChange={(v) => setLineUnit(l.key, v)}
                           >
                             <SelectTrigger className="h-7 text-[13px]">

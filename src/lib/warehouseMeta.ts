@@ -4,6 +4,8 @@
  * Theo nghiệp vụ K9 (xác nhận 2026-08):
  * - Kho Địa điểm kinh doanh 06 (code Q4_275) = Q4 Cũ
  * - Kho Địa điểm kinh doanh 01 (code Q4_178) = Q4 Mới
+ *
+ * Code DB vẫn là Q4_178 / Q4_275 — UI luôn hiện Q4 Mới / Q4 Cũ.
  */
 export const WAREHOUSE_PRINT_META: Record<
   string,
@@ -46,6 +48,26 @@ export const WAREHOUSE_PRINT_META: Record<
   },
 };
 
+/** Tên đầy đủ GAS → nhãn hiển thị (không dùng Q4_178 / Q4_275 trên UI). */
+export const STORE_DISPLAY_LABELS: Record<string, string> = {
+  "Kho Địa điểm kinh doanh Q7": "Q7",
+  "Kho Địa điểm kinh doanh 01": "Q4 Mới",
+  "Kho Địa điểm kinh doanh 02": "Q8",
+  "Kho Địa điểm kinh doanh 03": "PH",
+  "Kho Địa điểm kinh doanh 04": "Q5",
+  "Kho Địa điểm kinh doanh 05": "Q1",
+  "Kho Địa điểm kinh doanh 06": "Q4 Cũ",
+};
+
+/** Nhãn UI bắt buộc theo code — ghi đè short_name sai trong DB (vd còn Q4_275). */
+export function forcedWarehouseShortName(
+  code: string | null | undefined,
+): string | null {
+  const c = String(code || "").trim();
+  if (!c) return null;
+  return WAREHOUSE_PRINT_META[c]?.short_name ?? null;
+}
+
 export function enrichWarehouseMeta<
   T extends {
     code?: string | null;
@@ -57,15 +79,16 @@ export function enrichWarehouseMeta<
   if (!w?.code) return (w as T) || null;
   const fb = WAREHOUSE_PRINT_META[w.code];
   if (!fb) return w;
+  // Luôn ép short/print theo bảng chuẩn — tránh DB còn Q4_178/Q4_275 làm nhãn
   return {
     ...w,
-    short_name: w.short_name || fb.short_name,
-    print_name: w.print_name || fb.print_name,
+    short_name: fb.short_name,
+    print_name: fb.print_name,
     address: w.address || fb.address,
   };
 }
 
-/** Nhãn ngắn luôn ưu tiên Q4 Cũ / Q4 Mới (không hiện Q4_275). */
+/** Nhãn ngắn luôn ưu tiên Q4 Cũ / Q4 Mới (không hiện Q4_275 / Q4_178). */
 export function warehouseShortLabel(
   w:
     | {
@@ -78,11 +101,16 @@ export function warehouseShortLabel(
     | undefined,
 ): string {
   if (!w) return "—";
+  const forced = forcedWarehouseShortName(w.code);
+  if (forced) return forced;
   const e = enrichWarehouseMeta(w);
-  return (
+  const label =
     String(e?.short_name || "").trim() ||
     String(e?.print_name || "").trim() ||
     String(w.code || "").trim() ||
-    "—"
-  );
+    "—";
+  // Phòng trường hợp code lạ nhưng short_name vẫn là Q4_xxx
+  if (label === "Q4_178") return "Q4 Mới";
+  if (label === "Q4_275") return "Q4 Cũ";
+  return label;
 }

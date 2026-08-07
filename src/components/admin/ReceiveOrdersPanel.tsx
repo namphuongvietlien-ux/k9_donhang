@@ -129,6 +129,7 @@ export default function ReceiveOrdersPanel() {
           itemId: it.id,
           qtyReceived: received[it.id] ?? 0,
           productSlug: it.product_slug,
+          unit: it.unit,
         })),
       });
       toast({

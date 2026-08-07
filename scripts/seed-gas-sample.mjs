@@ -309,14 +309,16 @@ async function seedStock(wb, whByCode, slugToId) {
   const header = rows[0].map((h) => String(h || "").toLowerCase());
   const iKey = header.findIndex((h) => h === "key" || h.includes("mã"));
   const iQty = header.findIndex((h) => h === "qty" || h.includes("tồn") || h.includes("sl"));
+  const iDvt = header.findIndex(
+    (h) => h === "dvt" || h.includes("đvt") || h.includes("donvi") || h === "unit",
+  );
 
-  // Also index by barcode-like keys: try match product slug OR exact
   const allProducts = [];
   let from = 0;
   while (true) {
     const { data, error } = await supabase
       .from("products")
-      .select("id, slug")
+      .select("id, slug, unit")
       .range(from, from + 999);
     if (error) throw error;
     if (!data?.length) break;
@@ -325,11 +327,13 @@ async function seedStock(wb, whByCode, slugToId) {
     if (data.length < 1000) break;
   }
   const idBySlug = new Map(slugToId);
+  const unitById = new Map();
   for (const p of allProducts) {
     idBySlug.set(normalizeCode(p.slug), p.id);
+    unitById.set(p.id, p.unit || "cái");
   }
 
-  const byProduct = new Map();
+  const byProductUnit = new Map();
   let skipped = 0;
   for (let r = 1; r < rows.length; r++) {
     const key = cellToSku(rows[r][iKey >= 0 ? iKey : 0]);
@@ -344,30 +348,72 @@ async function seedStock(wb, whByCode, slugToId) {
       skipped++;
       continue;
     }
-    byProduct.set(pid, qty);
+    const dvtRaw =
+      iDvt >= 0 ? String(rows[r][iDvt] || "").trim() : "";
+    const unit = dvtRaw || unitById.get(pid) || "cái";
+    const unitKey = String(unit)
+      .trim()
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/đ/g, "d")
+      .replace(/\s+/g, "") || "cai";
+    const mapKey = `${pid}::${unitKey}`;
+    const prev = byProductUnit.get(mapKey);
+    if (prev) prev.quantity += qty;
+    else byProductUnit.set(mapKey, { product_id: pid, unit, unit_key: unitKey, quantity: qty });
   }
 
-  const payload = [...byProduct.entries()].map(([product_id, quantity]) => ({
+  const payload = [...byProductUnit.values()].map((r) => ({
     warehouse_id: q7,
-    product_id,
-    quantity,
+    product_id: r.product_id,
+    unit: r.unit,
+    unit_key: r.unit_key,
+    quantity: Math.max(0, r.quantity),
     updated_at: new Date().toISOString(),
   }));
 
   console.log(
-    `→ TON_Q7 match ${payload.length} SP, skip ${skipped} key không có trong catalog`,
+    `→ TON_Q7 match ${payload.length} dòng (mã+ĐVT), skip ${skipped} key không có trong catalog`,
   );
 
   await chunked(payload, 200, async (slice) => {
-    const { error } = await supabase.from("stock_on_hand").upsert(slice, {
-      onConflict: "warehouse_id,product_id",
+    let { error } = await supabase.from("stock_on_hand").upsert(slice, {
+      onConflict: "warehouse_id,product_id,unit_key",
     });
+    if (error && /unit_key|no unique|ON CONFLICT/i.test(error.message || "")) {
+      const collapsed = new Map();
+      for (const r of slice) collapsed.set(r.product_id, r);
+      const legacy = [...collapsed.values()].map((r) => ({
+        warehouse_id: r.warehouse_id,
+        product_id: r.product_id,
+        quantity: r.quantity,
+        updated_at: r.updated_at,
+      }));
+      ({ error } = await supabase.from("stock_on_hand").upsert(legacy, {
+        onConflict: "warehouse_id,product_id",
+      }));
+      if (!error) {
+        console.warn("⚠ Chưa có unit_key — chạy sql-fix-stock-unit-key.sql rồi seed lại");
+      }
+    }
     if (error) throw new Error(`stock_on_hand: ${error.message}`);
     return slice.length;
   });
 
-  // Sync products.stock_quantity for Q7
-  await chunked(payload, 60, async (slice) => {
+  // Sync products.stock_quantity for Q7 = tổng mọi ĐVT
+  const sumByProduct = new Map();
+  for (const r of payload) {
+    sumByProduct.set(
+      r.product_id,
+      (sumByProduct.get(r.product_id) || 0) + r.quantity,
+    );
+  }
+  const syncPayload = [...sumByProduct.entries()].map(([product_id, quantity]) => ({
+    product_id,
+    quantity,
+  }));
+  await chunked(syncPayload, 60, async (slice) => {
     await Promise.all(
       slice.map((r) =>
         supabase
@@ -379,7 +425,7 @@ async function seedStock(wb, whByCode, slugToId) {
     return slice.length;
   });
 
-  console.log(`✓ stock_on_hand Q7: ${payload.length} dòng`);
+  console.log(`✓ stock_on_hand Q7: ${payload.length} dòng (mã+ĐVT)`);
 }
 
 function parseExcelDate(v) {

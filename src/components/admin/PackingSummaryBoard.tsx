@@ -12,7 +12,8 @@ import {
   Sparkles,
 } from "lucide-react";
 import * as XLSX from "xlsx";
-import { useWarehouses } from "@/hooks/useWarehouses";
+import { useWarehouses, warehouseLabel } from "@/hooks/useWarehouses";
+import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import { usePackingOrders } from "@/hooks/useOrders";
 import { usePackingSourceWarehouse, useStock } from "@/hooks/useStock";
 import {
@@ -139,8 +140,7 @@ export default function PackingSummaryBoard({
     const codeToLabel = new Map<string, string>();
     for (const w of warehouses) {
       if (w.code === "Q7") continue;
-      const label =
-        String(w.short_name || w.print_name || w.code).trim() || w.code;
+      const label = warehouseLabel(w) || warehouseShortLabel(w) || w.code;
       codes.add(w.code);
       codeToLabel.set(w.code, label);
     }
@@ -148,7 +148,17 @@ export default function PackingSummaryBoard({
       const c = o.warehouse?.code;
       if (c && c !== "Q7") {
         codes.add(c);
-        if (!codeToLabel.has(c)) codeToLabel.set(c, c);
+        if (!codeToLabel.has(c)) {
+          codeToLabel.set(
+            c,
+            warehouseShortLabel(o.warehouse) || warehouseLabel({
+              code: c,
+              short_name: o.warehouse?.short_name,
+              print_name: o.warehouse?.print_name,
+              name: undefined,
+            }) || c,
+          );
+        }
       }
     }
     const sorted = [...codes].sort((a, b) => {
@@ -172,15 +182,19 @@ export default function PackingSummaryBoard({
       unitHint: string | null,
       barcodeHint: string | null,
     ): SummaryRow => {
-      const skuKey = normalizeOrderCodeText(slug || name) || name;
-      let row = map.get(skuKey);
       const meta = getMeta(index || new Map(), slug);
       const resolved = resolveLineUnitBarcode(meta, unitHint, barcodeHint);
+      // Key tổng hợp = mã + ĐVT (không gộp chung mã khác đơn vị)
+      const code = normalizeOrderCodeText(slug || name) || name;
+      const unitPart = normalizeOrderCodeText(resolved.unit || unitHint || "") || "—";
+      const skuKey = `${code}::${unitPart}`;
+      let row = map.get(skuKey);
 
       if (!row) {
         const stockQty =
+          getQty(slug, resolved.unit) ??
+          getQty(resolved.barcode, resolved.unit) ??
           getQty(slug) ??
-          getQty(resolved.barcode) ??
           (meta?.stock_quantity != null ? meta.stock_quantity : null);
         row = {
           skuKey,
@@ -206,8 +220,9 @@ export default function PackingSummaryBoard({
         }
         if (!row.stockMapped) {
           const stockQty =
+            getQty(slug, resolved.unit) ??
+            getQty(resolved.barcode, resolved.unit) ??
             getQty(slug) ??
-            getQty(resolved.barcode) ??
             (meta?.stock_quantity != null ? meta.stock_quantity : null);
           if (stockQty !== null) {
             row.stockOnHand = stockQty;

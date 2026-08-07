@@ -109,8 +109,10 @@ export default function PackingWeekCalendar({
     return map;
   }, [isAll, orders, weekDays, warehouses]);
 
-  const warehouseCode =
-    warehouses.find((w) => w.id === activeWarehouse)?.code ?? "Tất cả";
+  const activeWh = warehouses.find((w) => w.id === activeWarehouse);
+  const warehouseCode = activeWh
+    ? warehouseLabel(activeWh)
+    : "Tất cả";
 
   const openPrintForDay = (dateKey: string, dateLabel: string, list: typeof orders) => {
     setPrintDay({
@@ -121,11 +123,12 @@ export default function PackingWeekCalendar({
         order_code: o.order_code,
         status: o.status,
         warehouse_id: o.warehouse_id,
-        warehouse_code:
-          o.warehouse?.short_name ||
-          o.warehouse?.print_name ||
-          o.warehouse?.code ||
-          "—",
+        warehouse_code: warehouseLabel({
+          code: o.warehouse?.code || "",
+          short_name: o.warehouse?.short_name,
+          print_name: o.warehouse?.print_name,
+          name: o.warehouse?.name,
+        }),
         created_at: o.created_at,
         totalQty: o.totalQty,
       })),
@@ -257,7 +260,7 @@ export default function PackingWeekCalendar({
                       {warehouses.map((w) => (
                         <tr key={w.id} className="hover:bg-slate-50">
                           <td className="sticky left-0 z-10 bg-white border border-gray-200 px-2 py-1 font-bold">
-                            {w.code}
+                            {warehouseLabel(w)}
                           </td>
                           {weekDays.map((day) => {
                             const key = toDateKey(day);

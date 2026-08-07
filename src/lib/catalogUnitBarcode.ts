@@ -106,9 +106,21 @@ export function resolveUnitOption(
   options: SkuUnitOption[],
   unit: string,
 ): SkuUnitOption | null {
-  const u = normUnit(unit).toUpperCase();
+  const u = normUnit(unit);
   if (!u || !options.length) return null;
-  return options.find((o) => o.unit.toUpperCase() === u) || null;
+  const upper = u.toUpperCase();
+  const exact = options.find((o) => o.unit.toUpperCase() === upper);
+  if (exact) return exact;
+  // Khớp không dấu / khoảng trắng (Cái ≈ cái)
+  const fold = (s: string) =>
+    s
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/đ/g, "d")
+      .replace(/\s+/g, "");
+  const folded = fold(u);
+  return options.find((o) => fold(o.unit) === folded) || null;
 }
 
 export function isLoiMaSku(sku: string): boolean {

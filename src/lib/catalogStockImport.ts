@@ -1,6 +1,7 @@
 /**
  * Port GAS nhapKhauCapNhatThongTin — catalogFast + stockQ7 (parse phía client).
- * Ghi vào products + stock_on_hand thay cho Data_Excel / TON_Q7.
+ *   Ghi vào products + stock_on_hand thay cho Data_Excel / TON_Q7.
+ * stock_on_hand key = (warehouse, product, ĐVT) — khớp GAS MH:…|DV:…
  */
 
 import {
