@@ -952,7 +952,7 @@ export default function BanKemDvPanel() {
                 <SelectContent>
                   {(branches.length ? branches : warehouses).map((w) => (
                     <SelectItem key={w.id} value={w.id}>
-                      {warehouseLabel(w)} — {w.name}
+                      {warehouseLabel(w)}
                     </SelectItem>
                   ))}
                 </SelectContent>

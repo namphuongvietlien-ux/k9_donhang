@@ -538,7 +538,7 @@ const CreateWarehouseOrderForm = forwardRef<
               <SelectContent>
                 {warehouses.map((w) => (
                   <SelectItem key={w.id} value={w.id}>
-                    {formatWhLabel(w)} — {w.name}
+                    {formatWhLabel(w)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -564,7 +564,7 @@ const CreateWarehouseOrderForm = forwardRef<
               <SelectContent>
                 {warehouses.map((w) => (
                   <SelectItem key={w.id} value={w.id}>
-                    {formatWhLabel(w)} — {w.name}
+                    {formatWhLabel(w)}
                   </SelectItem>
                 ))}
               </SelectContent>
