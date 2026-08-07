@@ -26,7 +26,9 @@ import {
   useSalesVoucherByCode,
   useSalesVoucherMutations,
   useSalesVouchers,
+  fetchSalesVoucherItemsByVoucherIds,
   type SalesLineKind,
+  type SalesVoucherItem,
 } from "@/hooks/useSalesVouchers";
 import {
   buildSkuUnitIndex,
@@ -650,7 +652,7 @@ export default function BanKemDvPanel() {
   const locked = !!invoiceLocked;
   const packingBanner = useMemo(() => getPackingSaveBanner(new Date()), []);
 
-  const exportExcel = () => {
+  const exportExcel = async () => {
     const list = vouchers || [];
     if (!list.length) {
       toast({
@@ -659,6 +661,41 @@ export default function BanKemDvPanel() {
         variant: "destructive",
       });
       return;
+    }
+
+    toast({
+      title: "Đang xuất Excel…",
+      description: `Tải chi tiết ${list.length} phiếu (mã hàng / tên hàng)…`,
+    });
+
+    let itemsByVoucher = new Map<string, SalesVoucherItem[]>();
+    try {
+      const fetched = await fetchSalesVoucherItemsByVoucherIds(
+        list.map((v) => v.id),
+      );
+      for (const it of fetched) {
+        const vid = it.voucher_id;
+        if (!vid) continue;
+        const arr = itemsByVoucher.get(vid) || [];
+        arr.push(it);
+        itemsByVoucher.set(vid, arr);
+      }
+    } catch (e) {
+      // Fallback: dùng embed trong list nếu có
+      console.warn("[exportExcel] fetch items failed", e);
+      itemsByVoucher = new Map();
+      for (const v of list) {
+        if (v.sales_voucher_items?.length) {
+          itemsByVoucher.set(v.id, v.sales_voucher_items);
+        }
+      }
+    }
+
+    // Nếu vẫn thiếu, thử merge embed
+    for (const v of list) {
+      if (!itemsByVoucher.has(v.id) && v.sales_voucher_items?.length) {
+        itemsByVoucher.set(v.id, v.sales_voucher_items);
+      }
     }
 
     const listAoa: (string | number)[][] = [
@@ -702,34 +739,38 @@ export default function BanKemDvPanel() {
         short_name: null,
         name: v.warehouse_name,
       });
+      const items = [...(itemsByVoucher.get(v.id) || [])].sort(
+        (a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0),
+      );
       listAoa.push([
         idx + 1,
         v.voucher_code || "",
         v.invoice_no || "",
         cnLabel,
         v.warehouse_name || "",
-        v.itemCount ?? 0,
-        v.totalQty ?? 0,
+        items.length || v.itemCount || 0,
+        items.reduce((s, i) => s + (Number(i.quantity) || 0), 0) ||
+          v.totalQty ||
+          0,
         Math.round(Number(v.total_amount) || 0),
         v.status === "cancelled" ? "Đã hủy" : "Đã lưu",
         format(new Date(v.created_at), "HH:mm dd/MM/yyyy", { locale: vi }),
         v.notes || "",
       ]);
-      const items = [...(v.sales_voucher_items || [])].sort(
-        (a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0),
-      );
       for (const it of items) {
-        const isDv = it.line_kind === "DV";
+        const isDv = String(it.line_kind || "").toUpperCase() === "DV";
+        const maHang = String(it.product_slug || "").trim();
+        const tenHang = String(it.product_name || "").trim();
         detailAoa.push([
           detailStt++,
           v.voucher_code || "",
           v.invoice_no || "",
           cnLabel,
           isDv ? "DV" : "Hàng",
-          it.product_slug || "",
-          it.barcode || "",
-          it.product_name || "",
-          it.unit || "",
+          maHang,
+          String(it.barcode || "").trim(),
+          tenHang,
+          String(it.unit || "").trim(),
           Number(it.quantity) || 0,
           Math.round(Number(it.unit_price) || 0),
           isDv ? Math.round(Number(it.service_cost) || 0) : "",
@@ -743,27 +784,29 @@ export default function BanKemDvPanel() {
       toast({
         title: "Thiếu dòng chi tiết",
         description:
-          "Danh sách phiếu không kèm món hàng. Thử Làm mới rồi xuất lại.",
+          "Không đọc được mã hàng/tên từ sales_voucher_items. Kiểm tra RLS hoặc Làm mới rồi xuất lại.",
         variant: "destructive",
       });
+      return;
     }
 
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.aoa_to_sheet(listAoa),
-      "DanhSach",
-    );
+    // Chi tiết đặt sheet đầu — dễ thấy mã hàng / tên hàng
     XLSX.utils.book_append_sheet(
       wb,
       XLSX.utils.aoa_to_sheet(detailAoa),
       "ChiTiet",
     );
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.aoa_to_sheet(listAoa),
+      "DanhSach",
+    );
     const stamp = format(new Date(), "yyyyMMdd_HHmm");
     XLSX.writeFile(wb, `hoa-don-dich-vu_${stamp}.xlsx`);
     toast({
       title: "Đã xuất Excel",
-      description: `${list.length} phiếu · ${detailStt - 1} dòng chi tiết (sheet ChiTiet)`,
+      description: `${list.length} phiếu · ${detailStt - 1} dòng (sheet ChiTiet: mã hàng + tên hàng)`,
     });
   };
 
@@ -805,8 +848,8 @@ export default function BanKemDvPanel() {
               type="button"
               variant="outline"
               size="sm"
-              disabled={!vouchers?.length}
-              onClick={exportExcel}
+              disabled={!vouchers?.length || listLoading}
+              onClick={() => void exportExcel()}
             >
               <Download className="w-3.5 h-3.5 mr-1" />
               Xuất Excel

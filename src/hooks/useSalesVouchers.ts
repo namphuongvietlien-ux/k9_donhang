@@ -82,6 +82,53 @@ function mapVoucherRow(v: SalesVoucher): SalesVoucher {
   };
 }
 
+/** Lấy dòng chi tiết theo danh sách voucher — dùng khi xuất Excel (không phụ thuộc embed). */
+export async function fetchSalesVoucherItemsByVoucherIds(
+  voucherIds: string[],
+): Promise<SalesVoucherItem[]> {
+  const ids = [...new Set(voucherIds.filter(Boolean))];
+  if (!ids.length) return [];
+
+  const all: SalesVoucherItem[] = [];
+  const selectCols =
+    "id, voucher_id, product_slug, barcode, product_name, unit, quantity, unit_price, line_total, line_kind, service_cost, line_notes, sort_order";
+
+  for (let i = 0; i < ids.length; i += 80) {
+    const slice = ids.slice(i, i + 80);
+    const { data, error } = await supabase
+      .from("sales_voucher_items")
+      .select(selectCols)
+      .in("voucher_id", slice)
+      .order("sort_order", { ascending: true });
+
+    if (error) {
+      // Fallback cột tối thiểu nếu schema lệch
+      if (/column|schema|product_slug|service_cost/i.test(error.message || "")) {
+        const fb = await supabase
+          .from("sales_voucher_items")
+          .select(
+            "id, voucher_id, product_slug, barcode, product_name, unit, quantity, unit_price, line_total, line_kind, sort_order",
+          )
+          .in("voucher_id", slice)
+          .order("sort_order", { ascending: true });
+        if (fb.error) throw fb.error;
+        all.push(
+          ...(((fb.data as SalesVoucherItem[]) || []).map((it) => ({
+            ...it,
+            service_cost: it.service_cost ?? null,
+            line_notes: it.line_notes ?? null,
+          })) as SalesVoucherItem[]),
+        );
+        continue;
+      }
+      throw error;
+    }
+    all.push(...((data as SalesVoucherItem[]) || []));
+  }
+
+  return all;
+}
+
 async function fetchSalesVouchers(opts: {
   days?: number;
   search?: string;
