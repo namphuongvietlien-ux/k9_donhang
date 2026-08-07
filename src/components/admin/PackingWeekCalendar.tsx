@@ -121,7 +121,11 @@ export default function PackingWeekCalendar({
         order_code: o.order_code,
         status: o.status,
         warehouse_id: o.warehouse_id,
-        warehouse_code: o.warehouse?.code || "—",
+        warehouse_code:
+          o.warehouse?.short_name ||
+          o.warehouse?.print_name ||
+          o.warehouse?.code ||
+          "—",
         created_at: o.created_at,
         totalQty: o.totalQty,
       })),

@@ -12,6 +12,7 @@ import {
   toHoChiMinhMillis,
   type PackingMode,
 } from "@/lib/packingWindows";
+import { enrichWarehouseMeta, warehouseShortLabel } from "@/lib/warehouseMeta";
 
 export interface PackingOrderItem {
   id: string;
@@ -74,7 +75,7 @@ async function fetchPackingOrders(params: {
       `
       id, order_code, customer_name, status, created_at,
       warehouse_id, source_warehouse_id, packing_date, packing_shift, duplicate_accepted,
-      warehouse:warehouse_id ( id, code, name ),
+      warehouse:warehouse_id ( id, code, name, short_name, print_name ),
       order_items ( id, product_name, product_slug, quantity, qty_requested, price, unit, barcode )
     `,
     )
@@ -91,7 +92,7 @@ async function fetchPackingOrders(params: {
   }
 
   const { data, error } = await query;
-  if (error && /barcode|unit|qty_requested/i.test(error.message || "")) {
+  if (error && /short_name|print_name|barcode|unit|qty_requested/i.test(error.message || "")) {
     let q2 = supabase
       .from("orders")
       .select(
@@ -175,7 +176,7 @@ function mapPackingRows(
       packing_date: row.packing_date,
       packing_shift: row.packing_shift,
       duplicate_accepted: !!row.duplicate_accepted,
-      warehouse: row.warehouse,
+      warehouse: enrichWarehouseMeta(row.warehouse),
       order_items: items,
       totalQty,
       skuSignature: buildOrderSkuSignature(skuQty),
@@ -191,7 +192,7 @@ function mapPackingRows(
       soPhieu: o.order_code || o.id,
       orderCode: o.order_code,
       warehouseId: o.warehouse_id,
-      khoNhan: o.warehouse?.code || o.warehouse_id,
+      khoNhan: warehouseShortLabel(o.warehouse) || o.warehouse_id,
       duplicateAccepted: o.duplicate_accepted,
     })),
   ) as PackingOrder[];
@@ -248,13 +249,76 @@ export function useWeekOrders(options: {
       const weekEnd = new Date(weekStart);
       weekEnd.setDate(weekEnd.getDate() + 7);
 
+      type Raw = {
+        id: string;
+        order_code: string | null;
+        customer_name: string;
+        status: string;
+        created_at: string;
+        warehouse_id: string | null;
+        packing_date: string | null;
+        packing_shift: string | null;
+        duplicate_accepted: boolean | null;
+        warehouse: {
+          id: string;
+          code: string;
+          name: string;
+          short_name?: string | null;
+          print_name?: string | null;
+        } | null;
+        order_items: PackingOrderItem[] | null;
+      };
+
+      const mapWeekRows = (rows: unknown) => {
+        const mapped = ((rows as Raw[] | null) ?? [])
+          .filter((r) => !mapStatusToCancelled(r.status))
+          .map((row) => {
+            const items = row.order_items || [];
+            const skuQty: Record<string, number> = {};
+            let totalQty = 0;
+            for (const it of items) {
+              totalQty += it.quantity;
+              const key = normalizeOrderCodeText(
+                it.product_slug || it.product_name,
+              );
+              if (key) skuQty[key] = (skuQty[key] || 0) + it.quantity;
+            }
+            const createdAtMs = toHoChiMinhMillis(row.created_at);
+            const wh = enrichWarehouseMeta(row.warehouse);
+            return {
+              id: row.id,
+              order_code: row.order_code,
+              customer_name: row.customer_name,
+              status: row.status,
+              created_at: row.created_at,
+              warehouse_id: row.warehouse_id,
+              packing_date: row.packing_date,
+              packing_shift: row.packing_shift,
+              duplicate_accepted: !!row.duplicate_accepted,
+              warehouse: wh,
+              order_items: items,
+              totalQty,
+              skuSignature: buildOrderSkuSignature(skuQty),
+              createdAtMs,
+              inMain: false,
+              inSupp: false,
+              soPhieu: row.order_code || row.id,
+              orderCode: row.order_code,
+              warehouseId: row.warehouse_id,
+              khoNhan: warehouseShortLabel(wh) || row.warehouse_id,
+              duplicateAccepted: !!row.duplicate_accepted,
+            };
+          });
+        return attachDuplicateSuspects(mapped) as PackingOrder[];
+      };
+
       let query = supabase
         .from("orders")
         .select(
           `
           id, order_code, customer_name, status, created_at,
           warehouse_id, packing_date, packing_shift, duplicate_accepted,
-          warehouse:warehouse_id ( id, code, name ),
+          warehouse:warehouse_id ( id, code, name, short_name, print_name ),
           order_items ( id, product_name, product_slug, quantity, price, unit, barcode )
         `,
         )
@@ -268,60 +332,30 @@ export function useWeekOrders(options: {
       }
 
       const { data, error } = await query;
+      if (error && /short_name|print_name/i.test(error.message || "")) {
+        let q2 = supabase
+          .from("orders")
+          .select(
+            `
+            id, order_code, customer_name, status, created_at,
+            warehouse_id, packing_date, packing_shift, duplicate_accepted,
+            warehouse:warehouse_id ( id, code, name ),
+            order_items ( id, product_name, product_slug, quantity, price, unit, barcode )
+          `,
+          )
+          .gte("created_at", weekStart.toISOString())
+          .lt("created_at", weekEnd.toISOString())
+          .order("created_at", { ascending: true })
+          .limit(1000);
+        if (options.warehouseId) {
+          q2 = q2.eq("warehouse_id" as never, options.warehouseId);
+        }
+        const retry = await q2;
+        if (retry.error) throw retry.error;
+        return mapWeekRows(retry.data);
+      }
       if (error) throw error;
-
-      type Raw = {
-        id: string;
-        order_code: string | null;
-        customer_name: string;
-        status: string;
-        created_at: string;
-        warehouse_id: string | null;
-        packing_date: string | null;
-        packing_shift: string | null;
-        duplicate_accepted: boolean | null;
-        warehouse: { id: string; code: string; name: string } | null;
-        order_items: PackingOrderItem[] | null;
-      };
-
-      const mapped = ((data as unknown as Raw[] | null) ?? [])
-        .filter((r) => !mapStatusToCancelled(r.status))
-        .map((row) => {
-          const items = row.order_items || [];
-          const skuQty: Record<string, number> = {};
-          let totalQty = 0;
-          for (const it of items) {
-            totalQty += it.quantity;
-            const key = normalizeOrderCodeText(it.product_slug || it.product_name);
-            if (key) skuQty[key] = (skuQty[key] || 0) + it.quantity;
-          }
-          const createdAtMs = toHoChiMinhMillis(row.created_at);
-          return {
-            id: row.id,
-            order_code: row.order_code,
-            customer_name: row.customer_name,
-            status: row.status,
-            created_at: row.created_at,
-            warehouse_id: row.warehouse_id,
-            packing_date: row.packing_date,
-            packing_shift: row.packing_shift,
-            duplicate_accepted: !!row.duplicate_accepted,
-            warehouse: row.warehouse,
-            order_items: items,
-            totalQty,
-            skuSignature: buildOrderSkuSignature(skuQty),
-            createdAtMs,
-            inMain: false,
-            inSupp: false,
-            soPhieu: row.order_code || row.id,
-            orderCode: row.order_code,
-            warehouseId: row.warehouse_id,
-            khoNhan: row.warehouse?.code || row.warehouse_id,
-            duplicateAccepted: !!row.duplicate_accepted,
-          };
-        });
-
-      return attachDuplicateSuspects(mapped) as PackingOrder[];
+      return mapWeekRows(data);
     },
   });
 }

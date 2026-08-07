@@ -20,6 +20,7 @@ export function warehouseLabel(
   return (
     String(w.short_name || "").trim() ||
     String(w.print_name || "").trim() ||
+    // Không ưu tiên name dài "Kho Địa điểm…" — hiện code chỉ khi thiếu nhãn
     w.code
   );
 }

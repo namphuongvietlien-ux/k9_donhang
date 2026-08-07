@@ -14,8 +14,10 @@ import {
   normalizeOrderCodeText,
 } from "@/lib/packingWindows";
 import { checkDuplicateBeforeSave } from "@/hooks/useOrderImport";
-import { enrichWarehouseMeta } from "@/lib/warehouseMeta";
+import { enrichWarehouseMeta, warehouseShortLabel } from "@/lib/warehouseMeta";
 import { notifyWarehouseEvent } from "@/lib/telegramNotify";
+
+export { warehouseShortLabel };
 
 export interface WarehouseOrderItem {
   id: string;
@@ -83,8 +85,16 @@ export interface WarehouseOrderFilters {
 const ITEM_SELECT =
   "id, product_name, product_slug, price, quantity, qty_requested, qty_packed, qty_received, line_notes, barcode, unit";
 
-/** Cơ bản — luôn chạy được khi chưa migration address */
+/** Cơ bản + nhãn Q4 Cũ/Mới — luôn lấy short_name để UI không hiện Q4_275 */
 const ORDER_SELECT = `
+  id, order_code, order_kind, customer_name, status, created_at, updated_at, notes,
+  warehouse_id, source_warehouse_id, packing_date, packing_shift, total_amount,
+  source_warehouse:source_warehouse_id ( id, code, name, short_name, print_name, address ),
+  warehouse:warehouse_id ( id, code, name, short_name, print_name, address ),
+  order_items ( ${ITEM_SELECT} )
+`;
+
+const ORDER_SELECT_BASIC = `
   id, order_code, order_kind, customer_name, status, created_at, updated_at, notes,
   warehouse_id, source_warehouse_id, packing_date, packing_shift, total_amount,
   source_warehouse:source_warehouse_id ( id, code, name ),
@@ -317,8 +327,8 @@ async function loadOrderTelegramCtx(orderId: string) {
   } | null;
   return {
     soPhieu: row?.order_code || orderId.slice(0, 8),
-    khoXuat: row?.source_warehouse?.code || "—",
-    khoNhan: row?.warehouse?.code || "—",
+    khoXuat: warehouseShortLabel(row?.source_warehouse) || "—",
+    khoNhan: warehouseShortLabel(row?.warehouse) || "—",
   };
 }
 
@@ -353,6 +363,36 @@ export function useWarehouseOrders(filters: WarehouseOrderFilters = {}) {
       }
 
       const { data, error } = await q;
+      if (error && /short_name|print_name|address/i.test(error.message || "")) {
+        let q2 = supabase
+          .from("orders")
+          .select(ORDER_SELECT_BASIC)
+          .order("created_at", { ascending: false })
+          .limit(filters.limit ?? 150);
+        if (filters.kind && filters.kind !== "ALL") {
+          q2 = q2.eq("order_kind" as never, filters.kind);
+        } else {
+          q2 = q2.in("order_kind" as never, ["DH", "DC"]);
+        }
+        if (filters.status && filters.status !== "ALL") {
+          q2 = q2.eq("status", filters.status);
+        }
+        if (filters.warehouseId) {
+          q2 = q2.eq("warehouse_id" as never, filters.warehouseId);
+        }
+        if (filters.sourceWarehouseId) {
+          q2 = q2.eq("source_warehouse_id" as never, filters.sourceWarehouseId);
+        }
+        if (filters.search?.trim()) {
+          const s = filters.search.trim();
+          q2 = q2.or(`order_code.ilike.%${s}%,customer_name.ilike.%${s}%`);
+        }
+        const retry = await q2;
+        if (retry.error) throw retry.error;
+        return ((retry.data as unknown as Record<string, unknown>[]) || []).map(
+          mapOrder,
+        );
+      }
       if (error) throw error;
       return ((data as unknown as Record<string, unknown>[]) || []).map(mapOrder);
     },
@@ -370,6 +410,16 @@ export function useWarehouseOrder(orderId: string | null) {
         .select(ORDER_SELECT)
         .eq("id", orderId!)
         .single();
+
+      if (error && /short_name|print_name|address/i.test(error.message || "")) {
+        const retry = await supabase
+          .from("orders")
+          .select(ORDER_SELECT_BASIC)
+          .eq("id", orderId!)
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
 
       // Fallback nếu chưa chạy migration line_notes / barcode / unit
       if (

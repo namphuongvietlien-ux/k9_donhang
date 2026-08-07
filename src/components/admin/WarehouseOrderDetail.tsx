@@ -49,6 +49,7 @@ import {
   normalizeOrderCodeText,
 } from "@/lib/packingWindows";
 import { notifyWarehouseEvent } from "@/lib/telegramNotify";
+import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import ProductFlagBadges from "@/components/admin/ProductFlagBadges";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -424,8 +425,8 @@ export default function WarehouseOrderDetail({
       void notifyWarehouseEvent({
         event: "order_changed",
         soPhieu: order.order_code || order.id,
-        khoXuat: order.source_warehouse?.code || "—",
-        khoNhan: order.warehouse?.code || "—",
+        khoXuat: warehouseShortLabel(order.source_warehouse),
+        khoNhan: warehouseShortLabel(order.warehouse),
         extra: changes.length
           ? `Đã lưu xác nhận · ${changes.length} dòng SL`
           : "Đã lưu xác nhận (không đổi SL)",
@@ -495,8 +496,8 @@ export default function WarehouseOrderDetail({
             </Badge>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
-            {order.source_warehouse?.code || "—"} →{" "}
-            {order.warehouse?.code || "—"}
+            {warehouseShortLabel(order.source_warehouse)} →{" "}
+            {warehouseShortLabel(order.warehouse)}
           </p>
           <p className="text-sm font-semibold text-blue-700 mt-0.5">
             Ngày tạo:{" "}

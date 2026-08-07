@@ -64,3 +64,25 @@ export function enrichWarehouseMeta<
     address: w.address || fb.address,
   };
 }
+
+/** Nhãn ngắn luôn ưu tiên Q4 Cũ / Q4 Mới (không hiện Q4_275). */
+export function warehouseShortLabel(
+  w:
+    | {
+        code?: string | null;
+        short_name?: string | null;
+        print_name?: string | null;
+        name?: string | null;
+      }
+    | null
+    | undefined,
+): string {
+  if (!w) return "—";
+  const e = enrichWarehouseMeta(w);
+  return (
+    String(e?.short_name || "").trim() ||
+    String(e?.print_name || "").trim() ||
+    String(w.code || "").trim() ||
+    "—"
+  );
+}

@@ -797,7 +797,14 @@ export default function BanKemDvPanel() {
                         {v.invoice_no}
                       </TableCell>
                       <TableCell className={excelTd}>
-                        {v.warehouse_code || "—"}
+                        {(() => {
+                          const wh = warehouses.find(
+                            (w) => w.code === v.warehouse_code,
+                          );
+                          return wh
+                            ? warehouseLabel(wh)
+                            : v.warehouse_code || "—";
+                        })()}
                       </TableCell>
                       <TableCell
                         className={cn(excelTd, "text-right tabular-nums")}

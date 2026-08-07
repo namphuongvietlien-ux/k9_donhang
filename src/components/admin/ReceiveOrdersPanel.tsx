@@ -28,6 +28,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import {
   qtyMismatchKind,
   QTY_MISMATCH_ROW,
@@ -195,8 +196,8 @@ export default function ReceiveOrdersPanel() {
             <SelectContent>
               {eligible.map((o) => (
                 <SelectItem key={o.id} value={o.id}>
-                  {o.order_code} · {o.source_warehouse?.code || "?"} →{" "}
-                  {o.warehouse?.code || "?"} · {o.status}
+                  {o.order_code} · {warehouseShortLabel(o.source_warehouse)} →{" "}
+                  {warehouseShortLabel(o.warehouse)} · {o.status}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -214,7 +215,8 @@ export default function ReceiveOrdersPanel() {
           <div className="flex flex-wrap gap-2 text-sm items-center">
             <Badge variant="secondary">{order.order_code}</Badge>
             <Badge variant="outline">
-              {order.source_warehouse?.code} → {order.warehouse?.code}
+              {warehouseShortLabel(order.source_warehouse)} →{" "}
+              {warehouseShortLabel(order.warehouse)}
             </Badge>
             <Badge variant="outline">{order.order_items.length} dòng</Badge>
             <span className="text-xs text-muted-foreground font-medium">
