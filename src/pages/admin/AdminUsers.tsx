@@ -360,7 +360,10 @@ const AdminUsers = () => {
   ];
 
   return (
-    <AdminRoute requiredPermission="users.view">
+    <AdminRoute
+      requiredRole="manager"
+      accessDeniedRedirect="/admin"
+    >
       <AdminLayout>
         <SEO title="Quản lý Users" />
         <div className="space-y-6">

@@ -43,6 +43,7 @@ import {
   getSkuUnitOptions,
   isLoiMaSku,
   LOI_MA_SKU,
+  resolveAvailableVariants,
   resolveUnitOption,
   type CatalogProductRow,
   type SkuUnitOption,
@@ -93,7 +94,7 @@ interface CartLine {
   maVach: string;
   tenHang: string;
   dvt: string;
-  /** Quy cách từ catalog; rỗng = Lỗi Mã / mã ngoài → Input tự do */
+  /** Quy cách từ catalog (availableVariants); rỗng = mã ngoài → Input ĐVT tự do */
   unitOptions: SkuUnitOption[];
   quantity: number;
   productId: string | null;
@@ -284,19 +285,33 @@ const CreateWarehouseOrderForm = forwardRef<
       return;
     }
     const ma = normalizeOrderCodeText(p.slug);
-    const unitOpts = getSkuUnitOptions(skuUnitIndex, ma);
-    const picked = pickOptionForProduct(p, preferredBarcode || scan.trim());
+    // Variants = mọi ĐVT cùng SKU trong catalog (unit + unit_2, nhiều dòng)
+    const optsFromCatalog = resolveAvailableVariants(
+      catalogList as CatalogProductRow[],
+      ma,
+    );
     const opts =
-      unitOpts.length > 0
-        ? unitOpts
+      optsFromCatalog.length > 0
+        ? optsFromCatalog
         : expandProductUnitOptions(p as CatalogProductRow);
+    const picked =
+      (preferredBarcode || scan.trim()
+        ? opts.find(
+            (o) =>
+              normalizeOrderCodeText(o.barcode) ===
+              normalizeOrderCodeText(preferredBarcode || scan.trim()),
+          )
+        : null) ||
+      pickOptionForProduct(p, preferredBarcode || scan.trim()) ||
+      opts[0];
+    const unit = picked?.unit || p.unit || "cái";
+    const barcode = picked?.barcode || p.barcode || "";
 
     setLines((prev) => {
       const exist = prev.find(
         (l) =>
           normalizeOrderCodeText(l.maHang) === ma &&
-          normalizeOrderCodeText(l.dvt) ===
-            normalizeOrderCodeText(picked.unit),
+          normalizeOrderCodeText(l.dvt) === normalizeOrderCodeText(unit),
       );
       if (exist) {
         return prev.map((l) =>
@@ -305,16 +320,16 @@ const CreateWarehouseOrderForm = forwardRef<
       }
       return [
         {
-          key: `${Date.now()}-${ma}-${picked.unit}`,
+          key: `${Date.now()}-${ma}-${unit}`,
           maHang: ma,
-          maVach: picked.barcode || "",
+          maVach: barcode,
           tenHang: p.name,
-          dvt: picked.unit,
+          dvt: unit,
           unitOptions: opts,
           quantity: 1,
-          productId: picked.productId,
-          price: picked.price,
-          stockQty: getQty(ma, picked.unit),
+          productId: picked?.productId || p.id,
+          price: picked?.price ?? p.price ?? 0,
+          stockQty: getQty(ma, unit),
         },
         ...prev,
       ];
@@ -404,7 +419,7 @@ const CreateWarehouseOrderForm = forwardRef<
     );
   };
 
-  /** Đổi ĐVT → sync mã vạch (+ productId) theo catalog */
+  /** Đổi ĐVT → sync mã vạch ngay (giữ mã hàng + tên) */
   const setLineUnit = (key: string, dvt: string) => {
     setLines((prev) =>
       prev.map((l) => {
@@ -419,10 +434,16 @@ const CreateWarehouseOrderForm = forwardRef<
           dvt: match.unit,
           maVach: match.barcode,
           productId: match.productId,
-          // Giữ nguyên tên hàng / mã hàng — chỉ sync MV + giá
           price: match.price || l.price,
+          stockQty: getQty(l.maHang, match.unit) ?? l.stockQty,
         };
       }),
+    );
+  };
+
+  const setLineBarcode = (key: string, barcode: string) => {
+    setLines((prev) =>
+      prev.map((l) => (l.key === key ? { ...l, maVach: barcode } : l)),
     );
   };
 
@@ -743,13 +764,16 @@ const CreateWarehouseOrderForm = forwardRef<
             <TableHeader>
               <TableRow>
                 <TableHead className={cn(excelTh, "w-10")}>STT</TableHead>
-                <TableHead className={cn(excelTh, "text-left min-w-[120px]")}>
+                <TableHead className={cn(excelTh, "text-left min-w-[100px]")}>
                   Mã hàng
                 </TableHead>
-                <TableHead className={cn(excelTh, "text-left")}>
-                  Tên / Phân loại
+                <TableHead className={cn(excelTh, "text-left min-w-[120px]")}>
+                  Mã vạch
                 </TableHead>
-                <TableHead className={cn(excelTh, "w-28")}>ĐVT</TableHead>
+                <TableHead className={cn(excelTh, "text-left")}>
+                  Tên hàng
+                </TableHead>
+                <TableHead className={cn(excelTh, "w-32")}>ĐVT</TableHead>
                 <TableHead
                   className={cn(excelTh, "text-right w-20 bg-emerald-100")}
                 >
@@ -765,7 +789,7 @@ const CreateWarehouseOrderForm = forwardRef<
               {lines.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={7}
+                    colSpan={8}
                     className={cn(
                       excelTd,
                       "text-center text-muted-foreground py-8 h-auto",
@@ -778,6 +802,7 @@ const CreateWarehouseOrderForm = forwardRef<
                 lines.map((l, idx) => {
                   const loi = isLoiMaSku(l.maHang);
                   const hasUnits = l.unitOptions.length > 0;
+                  const unitLocked = l.unitOptions.length === 1;
                   const tonLive =
                     getQty(l.maHang, l.dvt) ??
                     getQty(l.maVach, l.dvt) ??
@@ -808,9 +833,25 @@ const CreateWarehouseOrderForm = forwardRef<
                         >
                           {normalizeOrderCodeText(l.maHang) || l.maHang}
                         </div>
-                        <div className="text-xs text-gray-500 font-mono leading-tight">
-                          MV: {l.maVach || "—"}
-                        </div>
+                      </TableCell>
+                      <TableCell className={excelTd}>
+                        <Input
+                          className={cn(
+                            "h-7 text-sm font-mono p-1",
+                            hasUnits && !loi && "bg-muted",
+                          )}
+                          value={l.maVach}
+                          readOnly={hasUnits && !loi}
+                          onChange={(e) =>
+                            setLineBarcode(l.key, e.target.value)
+                          }
+                          placeholder="Mã vạch"
+                          title={
+                            hasUnits && !loi
+                              ? "Đổi ĐVT để đổi mã vạch theo catalog"
+                              : undefined
+                          }
+                        />
                       </TableCell>
                       <TableCell
                         className={cn(
@@ -839,8 +880,14 @@ const CreateWarehouseOrderForm = forwardRef<
                               l.dvt
                             }
                             onValueChange={(v) => setLineUnit(l.key, v)}
+                            disabled={unitLocked}
                           >
-                            <SelectTrigger className="h-7 text-[13px]">
+                            <SelectTrigger
+                              className={cn(
+                                "h-7 text-[13px]",
+                                unitLocked && "opacity-80",
+                              )}
+                            >
                               <SelectValue placeholder="Chọn ĐVT" />
                             </SelectTrigger>
                             <SelectContent>

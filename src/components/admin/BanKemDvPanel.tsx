@@ -31,8 +31,8 @@ import {
 import {
   buildSkuUnitIndex,
   expandProductUnitOptions,
-  getSkuUnitOptions,
   resolveUnitOption,
+  resolveAvailableVariants,
   type CatalogProductRow,
   type SkuUnitOption,
 } from "@/lib/catalogUnitBarcode";
@@ -324,13 +324,18 @@ export default function BanKemDvPanel() {
       scanRef.current?.focus();
       return;
     }
-    const opts =
-      getSkuUnitOptions(skuUnitIndex, p.slug).length > 0
-        ? getSkuUnitOptions(skuUnitIndex, p.slug)
+    const opts = resolveAvailableVariants(
+      catalogList as CatalogProductRow[],
+      p.slug,
+    );
+    const unitOpts =
+      opts.length > 0
+        ? opts
         : expandProductUnitOptions(p as CatalogProductRow);
     const bc = normalizeOrderCodeText(scan.trim());
     const picked =
-      opts.find((o) => normalizeOrderCodeText(o.barcode) === bc) || opts[0];
+      unitOpts.find((o) => normalizeOrderCodeText(o.barcode) === bc) ||
+      unitOpts[0];
     const dvt = picked?.unit || p.unit || "cái";
     const ma = normalizeOrderCodeText(p.slug);
     const kind: SalesLineKind = isSalesServiceLine({
@@ -361,7 +366,7 @@ export default function BanKemDvPanel() {
           maVach: picked?.barcode || p.barcode || "",
           tenHang: p.name,
           dvt,
-          unitOptions: opts,
+          unitOptions: unitOpts,
           quantity: 1,
           unitPrice: kind === "HANG" ? price : 0,
           serviceFee: kind === "DV" ? price : 0,
@@ -1214,7 +1219,18 @@ export default function BanKemDvPanel() {
                         {normalizeOrderCodeText(l.maHang) || l.maHang}
                       </TableCell>
                       <TableCell className={cn(excelTd, "font-mono text-xs")}>
-                        {l.maVach || "—"}
+                        <Input
+                          className={cn(
+                            "h-7 text-xs font-mono p-1",
+                            l.unitOptions.length > 0 && "bg-muted",
+                          )}
+                          value={l.maVach}
+                          readOnly={l.unitOptions.length > 0}
+                          onChange={(e) =>
+                            patchLine(l.key, { maVach: e.target.value })
+                          }
+                          placeholder="Mã vạch"
+                        />
                       </TableCell>
                       <TableCell className={cn(excelTd, "text-xs text-left")}>
                         {l.tenHang}
@@ -1228,6 +1244,7 @@ export default function BanKemDvPanel() {
                               l.dvt
                             }
                             onValueChange={(v) => setLineUnit(l.key, v)}
+                            disabled={l.unitOptions.length === 1}
                           >
                             <SelectTrigger className="h-7 text-xs">
                               <SelectValue placeholder="ĐVT" />

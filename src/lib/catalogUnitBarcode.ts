@@ -102,6 +102,17 @@ export function getSkuUnitOptions(
   return index.get(key) || [];
 }
 
+/**
+ * Tra cứu mọi quy cách ĐVT/MV của 1 mã hàng từ danh mục đã tải
+ * (gộp mọi dòng products cùng slug + unit/unit_2).
+ */
+export function resolveAvailableVariants(
+  products: CatalogProductRow[],
+  sku: string,
+): SkuUnitOption[] {
+  return getSkuUnitOptions(buildSkuUnitIndex(products), sku);
+}
+
 export function resolveUnitOption(
   options: SkuUnitOption[],
   unit: string,

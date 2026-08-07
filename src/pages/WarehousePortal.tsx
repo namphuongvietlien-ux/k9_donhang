@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, useSearchParams } from "react-router-dom";
+import { Navigate, Link, useSearchParams } from "react-router-dom";
 import {
   ClipboardList,
   FileSpreadsheet,
@@ -10,6 +10,7 @@ import {
   ArrowRightLeft,
   PenLine,
   Settings,
+  Users,
 } from "lucide-react";
 import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import { useAuth } from "@/contexts/AuthContext";
@@ -499,6 +500,19 @@ export default function WarehousePortal() {
                 Tất cả kho
               </Badge>
             )}
+            {(role === "super_admin" || role === "manager") && (
+              <Button
+                asChild
+                variant="ghost"
+                size="sm"
+                className="text-slate-200 hover:text-white hover:bg-slate-800"
+              >
+                <Link to="/admin/users">
+                  <Users className="w-4 h-4 mr-1" />
+                  Tài khoản
+                </Link>
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -609,6 +623,24 @@ export default function WarehousePortal() {
 
         {tab === "admin" && (
           <div className="space-y-6">
+            {(role === "super_admin" || role === "manager") && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Users className="w-4 h-4" />
+                    Quản lý tài khoản
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Tạo user, đổi role — chỉ Quản trị / Quản lý.
+                  </p>
+                  <Button asChild>
+                    <Link to="/admin/users">Mở Quản lý Users</Link>
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
             <CatalogAdminHub />
             <Tabs defaultValue="transfer">
               <TabsList className="flex flex-wrap h-auto gap-1">

@@ -6,6 +6,7 @@ interface UseAdminRouteOptions {
   requiredPermission?: string;
   requiredRole?: 'super_admin' | 'manager' | 'staff';
   redirectTo?: string;
+  accessDeniedRedirect?: string;
 }
 
 /**
@@ -13,7 +14,12 @@ interface UseAdminRouteOptions {
  * @param options - Route protection options
  */
 export const useAdminRoute = (options: UseAdminRouteOptions = {}) => {
-  const { requiredPermission, requiredRole, redirectTo = '/admin/login' } = options;
+  const {
+    requiredPermission,
+    requiredRole,
+    redirectTo = '/admin/login',
+    accessDeniedRedirect = '/admin/forbidden',
+  } = options;
   const { user, role, hasPermission, loading } = useAuth();
   const navigate = useNavigate();
 
@@ -44,17 +50,27 @@ export const useAdminRoute = (options: UseAdminRouteOptions = {}) => {
       const requiredRoleLevel = roleHierarchy[requiredRole] || 0;
 
       if (userRoleLevel < requiredRoleLevel) {
-        navigate('/admin/forbidden');
+        navigate(accessDeniedRedirect);
         return;
       }
     }
 
     // Check required permission
     if (requiredPermission && !hasPermission(requiredPermission)) {
-      navigate('/admin/forbidden');
+      navigate(accessDeniedRedirect);
       return;
     }
-  }, [user, role, hasPermission, requiredPermission, requiredRole, redirectTo, navigate, loading]);
+  }, [
+    user,
+    role,
+    hasPermission,
+    requiredPermission,
+    requiredRole,
+    redirectTo,
+    accessDeniedRedirect,
+    navigate,
+    loading,
+  ]);
 
   return { user, role, hasPermission, loading };
 };

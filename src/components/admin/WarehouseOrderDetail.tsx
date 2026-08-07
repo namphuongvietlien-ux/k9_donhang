@@ -41,6 +41,7 @@ import {
   expandProductUnitOptions,
   getSkuUnitOptions,
   resolveUnitOption,
+  resolveAvailableVariants,
   type CatalogProductRow,
 } from "@/lib/catalogUnitBarcode";
 import { filterCatalogSuggestions } from "@/lib/catalogSearch";
@@ -244,19 +245,22 @@ export default function WarehouseOrderDetail({
       return;
     }
     const ma = normalizeOrderCodeText(p.slug);
-    const unitOpts = getSkuUnitOptions(skuUnitIndex, ma);
-    const opts =
-      unitOpts.length > 0
-        ? unitOpts
+    const opts = resolveAvailableVariants(
+      catalogList as CatalogProductRow[],
+      ma,
+    );
+    const unitOpts =
+      opts.length > 0
+        ? opts
         : expandProductUnitOptions(p as CatalogProductRow);
     const bcPref = normalizeOrderCodeText(preferredBarcode || scan.trim());
     const match =
-      opts.find(
+      unitOpts.find(
         (o) =>
           bcPref &&
           normalizeOrderCodeText(o.barcode) === bcPref,
       ) ||
-      opts[0] ||
+      unitOpts[0] ||
       null;
 
     setNewSlug(ma);
@@ -761,6 +765,7 @@ export default function WarehouseOrderDetail({
                       newUnit
                     }
                     onValueChange={onAddUnitChange}
+                    disabled={addUnitOptions.length === 1}
                   >
                     <SelectTrigger className="w-28 h-10">
                       <SelectValue placeholder="ĐVT" />

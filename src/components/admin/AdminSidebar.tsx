@@ -57,6 +57,11 @@ interface MenuItem {
   permission?: string;
   /** Ẩn tạm — giữ route, không hiện menu (chuyển sang mô hình kho nội bộ) */
   hidden?: boolean;
+  /**
+   * Chỉ hiện với Quản trị viên / Quản lý.
+   * Chi nhánh (staff) không thấy — không ẩn hoàn toàn khỏi admin.
+   */
+  adminRolesOnly?: boolean;
 }
 
 interface MenuGroup {
@@ -214,7 +219,12 @@ const menuGroups: MenuGroup[] = [
 
 const standaloneItems: MenuItem[] = [
   { icon: LayoutDashboard, label: "Tổng quan", href: "/admin", permission: "dashboard.view" },
-  { icon: Users, label: "Quản lý Users", href: "/admin/users", permission: "users.view" },
+  {
+    icon: Users,
+    label: "Quản lý Users",
+    href: "/admin/users",
+    adminRolesOnly: true,
+  },
   { icon: Settings, label: "Cài đặt", href: "/admin/settings", permission: "settings.view" },
 ];
 
@@ -269,12 +279,17 @@ const AdminSidebar = (props: AdminSidebarProps = {}) => {
       });
   }, [hasPermission]);
 
+  const isAdminRole = role === "super_admin" || role === "manager";
+
   const filteredStandaloneItems = useMemo(() => {
     return standaloneItems.filter((item) => {
+      if (item.hidden) return false;
+      // Tài khoản: chỉ Admin/Quản lý — Chi nhánh không thấy
+      if (item.adminRolesOnly) return isAdminRole;
       if (!item.permission) return true;
       return hasPermission(item.permission);
     });
-  }, [hasPermission]);
+  }, [hasPermission, isAdminRole]);
   
   // Close mobile menu on navigation
   const handleLinkClick = () => {

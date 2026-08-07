@@ -7,7 +7,10 @@ interface AdminRouteProps {
   children: ReactNode;
   requiredPermission?: string;
   requiredRole?: 'super_admin' | 'manager' | 'staff';
+  /** Chưa đăng nhập / không có role → thường /admin/login */
   redirectTo?: string;
+  /** Đã đăng nhập nhưng thiếu quyền/role → mặc định /admin/forbidden */
+  accessDeniedRedirect?: string;
 }
 
 /**
@@ -22,11 +25,13 @@ export const AdminRoute = ({
   requiredPermission,
   requiredRole,
   redirectTo = '/admin/login',
+  accessDeniedRedirect = '/admin/forbidden',
 }: AdminRouteProps) => {
   const { user, role, hasPermission, loading } = useAdminRoute({
     requiredPermission,
     requiredRole,
     redirectTo,
+    accessDeniedRedirect,
   });
 
   if (loading) {
@@ -53,13 +58,13 @@ export const AdminRoute = ({
     const requiredRoleLevel = roleHierarchy[requiredRole] || 0;
 
     if (userRoleLevel < requiredRoleLevel) {
-      return <Navigate to="/admin/forbidden" replace />;
+      return <Navigate to={accessDeniedRedirect} replace />;
     }
   }
 
   // Check required permission
   if (requiredPermission && !hasPermission(requiredPermission)) {
-    return <Navigate to="/admin/forbidden" replace />;
+    return <Navigate to={accessDeniedRedirect} replace />;
   }
 
   return <>{children}</>;
