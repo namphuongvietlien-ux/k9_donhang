@@ -107,7 +107,12 @@ export function combineDateAndTime(dateObj: Date, timeHHmm: string): Date | null
   return new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate(), hh, mm, 0, 0);
 }
 
-/** Parse any common VN/ISO datetime → Unix ms (local components) */
+/**
+ * Parse datetime → Unix ms absolute.
+ * ISO có Z / offset (+07:00) phải parse theo UTC/offset thật — không lấy
+ * thành phần giờ trong chuỗi làm giờ local (bug khiến 08:30 VN = 01:30Z
+ * bị hiểu thành 01:30 local → lệch ca bổ sung 08:00–10:00).
+ */
 export function toHoChiMinhMillis(value: unknown): number {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.getTime();
   if (value === null || value === undefined || value === "") return NaN;
@@ -116,8 +121,18 @@ export function toHoChiMinhMillis(value: unknown): number {
   const s = String(value).trim();
   if (!s) return NaN;
 
+  // ISO / timestamptz với timezone: dùng parser chuẩn
+  if (
+    /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(s) &&
+    /(Z|[+-]\d{2}:?\d{2})$/i.test(s)
+  ) {
+    const abs = Date.parse(s);
+    return Number.isNaN(abs) ? NaN : abs;
+  }
+
+  // ISO không timezone — coi như giờ tường Asia/Ho_Chi_Minh (local components)
   const mIso = s.match(
-    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?/,
+    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?$/,
   );
   if (mIso) {
     return new Date(
@@ -146,8 +161,64 @@ export function toHoChiMinhMillis(value: unknown): number {
     ).getTime();
   }
 
-  const fallback = new Date(s);
-  return Number.isNaN(fallback.getTime()) ? NaN : fallback.getTime();
+  const fallback = Date.parse(s);
+  return Number.isNaN(fallback) ? NaN : fallback;
+}
+
+/**
+ * Thành phần giờ tường tại Asia/Ho_Chi_Minh (không phụ thuộc TZ máy).
+ */
+export function getHoChiMinhParts(ms: number): {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+} {
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    timeZone: PACKING_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(new Date(ms));
+  const get = (type: string) =>
+    Number(parts.find((p) => p.type === type)?.value || 0);
+  let hour = get("hour");
+  // en-GB đôi khi trả 24 cho nửa đêm
+  if (hour === 24) hour = 0;
+  return {
+    year: get("year"),
+    month: get("month"),
+    day: get("day"),
+    hour,
+    minute: get("minute"),
+    second: get("second"),
+  };
+}
+
+/** Absolute ms của một mốc giờ tường VN (y-m-d HH:mm) */
+export function vnWallTimeToMillis(
+  year: number,
+  monthIndex0: number,
+  day: number,
+  hour = 0,
+  minute = 0,
+  second = 0,
+): number {
+  // Xây ISO +07:00 — ổn định dù máy local không phải VN
+  const y = String(year).padStart(4, "0");
+  const m = String(monthIndex0 + 1).padStart(2, "0");
+  const d = String(day).padStart(2, "0");
+  const hh = String(hour).padStart(2, "0");
+  const mm = String(minute).padStart(2, "0");
+  const ss = String(second).padStart(2, "0");
+  return Date.parse(`${y}-${m}-${d}T${hh}:${mm}:${ss}+07:00`);
 }
 
 export const toMillisSafe = toHoChiMinhMillis;
@@ -172,22 +243,22 @@ function pad2(n: number) {
 export function formatOrderCreatedAtLabel(valueOrMs: unknown): string {
   const ms = toHoChiMinhMillis(valueOrMs);
   if (Number.isNaN(ms)) return "";
-  const d = new Date(ms);
-  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const p = getHoChiMinhParts(ms);
+  return `${pad2(p.day)}/${pad2(p.month)}/${p.year} ${pad2(p.hour)}:${pad2(p.minute)}`;
 }
 
 export function formatOrderTimestampUi(valueOrMs: unknown): string {
   const ms = toHoChiMinhMillis(valueOrMs);
   if (Number.isNaN(ms)) return "";
-  const d = new Date(ms);
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())} ${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+  const p = getHoChiMinhParts(ms);
+  return `${pad2(p.hour)}:${pad2(p.minute)} ${pad2(p.day)}/${pad2(p.month)}/${p.year}`;
 }
 
 export function formatOrderCreatedAtPretty(valueOrMs: unknown): string {
   const ms = toHoChiMinhMillis(valueOrMs);
   if (Number.isNaN(ms)) return "";
-  const d = new Date(ms);
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())} - ${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+  const p = getHoChiMinhParts(ms);
+  return `${pad2(p.hour)}:${pad2(p.minute)} - ${pad2(p.day)}/${pad2(p.month)}/${p.year}`;
 }
 
 // ── Packing windows (packing_timeline) ───────────────────────
@@ -196,29 +267,55 @@ export function getPackingDayWindows(
   packingDayDate?: Date | null,
   opts?: { mainStartTime?: string; mainEndTime?: string; suppEndTime?: string },
 ): PackingDayWindows {
-  const packingDay = packingDayDate
-    ? startOfLocalDay(packingDayDate)
-    : getTodayStart();
-  const prevDay = new Date(
-    packingDay.getFullYear(),
-    packingDay.getMonth(),
-    packingDay.getDate() - 1,
-    0,
-    0,
-    0,
-    0,
-  );
+  // Ngày giao: ưu tiên Y-M-D từ Date local (input date picker), else lịch VN hôm nay
+  let y: number;
+  let mo: number; // 1-12
+  let d: number;
+  if (packingDayDate && !Number.isNaN(packingDayDate.getTime())) {
+    y = packingDayDate.getFullYear();
+    mo = packingDayDate.getMonth() + 1;
+    d = packingDayDate.getDate();
+  } else {
+    const p = getHoChiMinhParts(Date.now());
+    y = p.year;
+    mo = p.month;
+    d = p.day;
+  }
+
+  const prevDate = new Date(y, mo - 1, d - 1);
+  const py = prevDate.getFullYear();
+  const pmo = prevDate.getMonth() + 1;
+  const pd = prevDate.getDate();
 
   const mainStartTime = opts?.mainStartTime || "10:00";
   const mainEndTime = opts?.mainEndTime || "08:00";
   const suppEndTime = opts?.suppEndTime || "10:00";
 
-  const mainStart = combineDateAndTime(prevDay, mainStartTime)!;
-  const mainEnd = combineDateAndTime(packingDay, mainEndTime)!;
-  const suppEnd = combineDateAndTime(packingDay, suppEndTime)!;
+  const parseHm = (t: string) => {
+    const m = String(t).match(/^(\d{1,2}):(\d{2})$/);
+    return { hh: Number(m?.[1] || 0), mm: Number(m?.[2] || 0) };
+  };
+  const ms = parseHm(mainStartTime);
+  const me = parseHm(mainEndTime);
+  const se = parseHm(suppEndTime);
 
-  const fmtRange = (a: Date, b: Date) =>
-    `${pad2(a.getDate())}/${pad2(a.getMonth() + 1)} ${pad2(a.getHours())}:${pad2(a.getMinutes())} → ${pad2(b.getDate())}/${pad2(b.getMonth() + 1)} ${pad2(b.getHours())}:${pad2(b.getMinutes())}`;
+  const mainStartMs = vnWallTimeToMillis(py, pmo - 1, pd, ms.hh, ms.mm);
+  const mainEndMs = vnWallTimeToMillis(y, mo - 1, d, me.hh, me.mm);
+  const suppEndMs = vnWallTimeToMillis(y, mo - 1, d, se.hh, se.mm);
+  const packingDayMs = vnWallTimeToMillis(y, mo - 1, d, 0, 0, 0);
+  const prevDayMs = vnWallTimeToMillis(py, pmo - 1, pd, 0, 0, 0);
+
+  const mainStart = new Date(mainStartMs);
+  const mainEnd = new Date(mainEndMs);
+  const suppEnd = new Date(suppEndMs);
+  const packingDay = new Date(packingDayMs);
+  const prevDay = new Date(prevDayMs);
+
+  const fmtRange = (aMs: number, bMs: number) => {
+    const ap = getHoChiMinhParts(aMs);
+    const bp = getHoChiMinhParts(bMs);
+    return `${pad2(ap.day)}/${pad2(ap.month)} ${pad2(ap.hour)}:${pad2(ap.minute)} → ${pad2(bp.day)}/${pad2(bp.month)} ${pad2(bp.hour)}:${pad2(bp.minute)}`;
+  };
 
   return {
     packingDay,
@@ -227,14 +324,14 @@ export function getPackingDayWindows(
     mainEnd,
     suppStart: mainEnd,
     suppEnd,
-    startMs: mainStart.getTime(),
-    midMs: mainEnd.getTime(),
-    endMs: suppEnd.getTime(),
-    packingDayStr: toDateKey(packingDay),
-    prevDayStr: toDateKey(prevDay),
-    mainLabel: `${fmtRange(mainStart, mainEnd)} (không gồm ${pad2(mainEnd.getHours())}:${pad2(mainEnd.getMinutes())})`,
-    suppLabel: `${fmtRange(mainEnd, suppEnd)} (không gồm ${pad2(suppEnd.getHours())}:${pad2(suppEnd.getMinutes())})`,
-    totalLabel: `${fmtRange(mainStart, suppEnd)} (không gồm ${pad2(suppEnd.getHours())}:${pad2(suppEnd.getMinutes())})`,
+    startMs: mainStartMs,
+    midMs: mainEndMs,
+    endMs: suppEndMs,
+    packingDayStr: `${y}-${pad2(mo)}-${pad2(d)}`,
+    prevDayStr: `${py}-${pad2(pmo)}-${pad2(pd)}`,
+    mainLabel: `${fmtRange(mainStartMs, mainEndMs)} (không gồm ${pad2(me.hh)}:${pad2(me.mm)})`,
+    suppLabel: `${fmtRange(mainEndMs, suppEndMs)} (không gồm ${pad2(se.hh)}:${pad2(se.mm)})`,
+    totalLabel: `${fmtRange(mainStartMs, suppEndMs)} (không gồm ${pad2(se.hh)}:${pad2(se.mm)})`,
   };
 }
 
@@ -276,8 +373,8 @@ export function isInPackingModeWindow(
 }
 
 /**
- * Infer packing day N2 from createdAt:
- * hour >= 10 → N2 = next calendar day; else N2 = same day
+ * Infer packing day N2 from createdAt (theo giờ tường VN):
+ * hour >= 10 → N2 = ngày lịch kế tiếp; else N2 = cùng ngày
  */
 export function inferPackingDayFromCreatedAt(createdAt: Date | string | number): {
   packingDay: Date;
@@ -285,24 +382,25 @@ export function inferPackingDayFromCreatedAt(createdAt: Date | string | number):
   win: PackingDayWindows;
 } {
   const ms = toHoChiMinhMillis(createdAt);
-  const at = new Date(ms);
-  const hour = at.getHours() + at.getMinutes() / 60;
-  const day = startOfLocalDay(at);
+  const parts = getHoChiMinhParts(ms);
+  const hour = parts.hour + parts.minute / 60;
   const packingDay =
     hour >= 10
-      ? new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1, 0, 0, 0, 0)
-      : day;
+      ? new Date(parts.year, parts.month - 1, parts.day + 1, 0, 0, 0, 0)
+      : new Date(parts.year, parts.month - 1, parts.day, 0, 0, 0, 0);
   const win = getPackingDayWindows(packingDay);
   const mode: PackingMode = isInPackingSuppWindow(ms, win) ? "supp" : "main";
   return { packingDay, mode, win };
 }
 
 function formatViDate(d: Date): string {
-  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+  const p = getHoChiMinhParts(d.getTime());
+  return `${pad2(p.day)}/${pad2(p.month)}/${p.year}`;
 }
 
 function formatViDateTime(d: Date): string {
-  return `${formatViDate(d)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+  const p = getHoChiMinhParts(d.getTime());
+  return `${pad2(p.day)}/${pad2(p.month)}/${p.year} ${pad2(p.hour)}:${pad2(p.minute)}:${pad2(p.second)}`;
 }
 
 /**

@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { format } from "date-fns";
-import { vi } from "date-fns/locale";
 import { Loader2, Printer } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -41,6 +39,10 @@ import {
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import {
+  getHoChiMinhParts,
+  toHoChiMinhMillis,
+} from "@/lib/packingWindows";
 
 const STATUS_VI: Record<string, string> = {
   pending: "Mới",
@@ -50,11 +52,10 @@ const STATUS_VI: Record<string, string> = {
 };
 
 function formatCreatedAt(iso: string) {
-  try {
-    return format(new Date(iso), "HH:mm · dd/MM", { locale: vi });
-  } catch {
-    return "—";
-  }
+  const ms = toHoChiMinhMillis(iso);
+  if (Number.isNaN(ms)) return "—";
+  const p = getHoChiMinhParts(ms);
+  return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")} · ${String(p.day).padStart(2, "0")}/${String(p.month).padStart(2, "0")}`;
 }
 
 export interface PrintDayOrderRow {
@@ -320,12 +321,14 @@ export default function PrintDayModal({
                 </TableRow>
               ) : (
                 visible.map((o) => {
-                  const hour = new Date(o.created_at).getHours();
-                  const minute = new Date(o.created_at).getMinutes();
-                  const mins = hour * 60 + minute;
-                  // Ca chính: trước 08:00 · bổ sung: 08:00–10:00
+                  const ms = toHoChiMinhMillis(o.created_at);
+                  const parts = Number.isNaN(ms)
+                    ? null
+                    : getHoChiMinhParts(ms);
+                  const mins = parts ? parts.hour * 60 + parts.minute : -1;
+                  // Ca chính: trước 08:00 · bổ sung: 08:00–10:00 (giờ VN)
                   const isSupp = mins >= 8 * 60 && mins < 10 * 60;
-                  const isMain = mins < 8 * 60;
+                  const isMain = mins >= 0 && mins < 8 * 60;
                   return (
                     <TableRow
                       key={o.id}
