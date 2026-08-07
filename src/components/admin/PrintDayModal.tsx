@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { format } from "date-fns";
+import { vi } from "date-fns/locale";
 import { Loader2, Printer } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -38,6 +40,22 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+
+const STATUS_VI: Record<string, string> = {
+  pending: "Mới",
+  processing: "Đã soạn",
+  completed: "Đã nhận",
+  cancelled: "Đã hủy",
+};
+
+function formatCreatedAt(iso: string) {
+  try {
+    return format(new Date(iso), "HH:mm · dd/MM", { locale: vi });
+  } catch {
+    return "—";
+  }
+}
 
 export interface PrintDayOrderRow {
   id: string;
@@ -182,8 +200,15 @@ export default function PrintDayModal({
   }, [open, dateKey, orders, defaultWarehouseId]);
 
   const visible = useMemo(() => {
-    if (whFilter === "all") return orders;
-    return orders.filter((o) => o.warehouse_id === whFilter);
+    const list =
+      whFilter === "all"
+        ? orders
+        : orders.filter((o) => o.warehouse_id === whFilter);
+    // Sắp theo giờ tạo — dễ tick/bỏ theo ca (chính / bổ sung)
+    return [...list].sort(
+      (a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    );
   }, [orders, whFilter]);
 
   useEffect(() => {
@@ -229,13 +254,13 @@ export default function PrintDayModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>In Đơn Ngày {dateLabel}</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          Chọn kho + tick đơn cần in → ghép 1 PDF liên tục (SL = số lượng soạn
-          nếu đã soạn).
+          Xem <strong>giờ tạo</strong> để tick/bỏ tick theo ca (chính trước
+          08:00 · bổ sung 08:00–10:00) → ghép 1 PDF (SL = số soạn nếu đã soạn).
         </p>
 
         <div className="space-y-1.5">
@@ -271,11 +296,12 @@ export default function PrintDayModal({
           </Label>
         </div>
 
-        <div className="rounded-md border max-h-72 overflow-auto">
+        <div className="rounded-md border max-h-80 overflow-auto">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead className="w-10" />
+                <TableHead className="whitespace-nowrap">Giờ tạo</TableHead>
                 <TableHead>Mã đơn</TableHead>
                 <TableHead>Kho</TableHead>
                 <TableHead>TT</TableHead>
@@ -286,31 +312,56 @@ export default function PrintDayModal({
               {visible.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={5}
+                    colSpan={6}
                     className="text-center text-muted-foreground py-8"
                   >
                     Không có đơn trong ngày / bộ lọc này.
                   </TableCell>
                 </TableRow>
               ) : (
-                visible.map((o) => (
-                  <TableRow key={o.id}>
-                    <TableCell>
-                      <Checkbox
-                        checked={selected.has(o.id)}
-                        onCheckedChange={(v) => toggle(o.id, v === true)}
-                      />
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {o.order_code}
-                    </TableCell>
-                    <TableCell>{o.warehouse_code || "—"}</TableCell>
-                    <TableCell className="text-xs">{o.status}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {o.totalQty}
-                    </TableCell>
-                  </TableRow>
-                ))
+                visible.map((o) => {
+                  const hour = new Date(o.created_at).getHours();
+                  const minute = new Date(o.created_at).getMinutes();
+                  const mins = hour * 60 + minute;
+                  // Ca chính: trước 08:00 · bổ sung: 08:00–10:00
+                  const isSupp = mins >= 8 * 60 && mins < 10 * 60;
+                  const isMain = mins < 8 * 60;
+                  return (
+                    <TableRow
+                      key={o.id}
+                      className={cn(
+                        isSupp && "bg-amber-50/70",
+                        isMain && "bg-teal-50/40",
+                      )}
+                    >
+                      <TableCell>
+                        <Checkbox
+                          checked={selected.has(o.id)}
+                          onCheckedChange={(v) => toggle(o.id, v === true)}
+                        />
+                      </TableCell>
+                      <TableCell
+                        className="font-mono text-xs tabular-nums whitespace-nowrap"
+                        title={o.created_at}
+                      >
+                        {formatCreatedAt(o.created_at)}
+                        <span className="block text-[10px] text-muted-foreground font-sans">
+                          {isSupp ? "Bổ sung" : isMain ? "Chính" : "Ngoài ca"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="font-mono text-sm">
+                        {o.order_code}
+                      </TableCell>
+                      <TableCell>{o.warehouse_code || "—"}</TableCell>
+                      <TableCell className="text-xs">
+                        {STATUS_VI[o.status] || o.status}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {o.totalQty}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>
@@ -326,7 +377,7 @@ export default function PrintDayModal({
             ) : (
               <Printer className="w-4 h-4 mr-2" />
             )}
-            In PDF ({selected.size})
+            In PDF ({[...selected].filter((id) => visible.some((o) => o.id === id)).length})
           </Button>
         </DialogFooter>
       </DialogContent>
