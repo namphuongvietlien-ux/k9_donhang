@@ -526,12 +526,12 @@ export function useSaveChildVariants() {
       return { updated, created, parentSku };
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["variant-groups"] });
-      void qc.invalidateQueries({ queryKey: ["catalog-flag-admin"] });
-      void qc.invalidateQueries({ queryKey: ["new-products-strip"] });
       window.setTimeout(() => {
+        void qc.invalidateQueries({ queryKey: ["variant-groups"] });
+        void qc.invalidateQueries({ queryKey: ["catalog-flag-admin"] });
+        void qc.invalidateQueries({ queryKey: ["new-products-strip"] });
         void qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] });
-      }, 0);
+      }, 150);
     },
   });
 }
@@ -556,12 +556,14 @@ export function useCreateCatalogSku() {
       const unit = String(input.dvt || "").trim() || "Cái";
       const barcode = String(input.maVach || "").trim() || null;
 
+      // BẮT BUỘC await mọi thao tác Supabase — không fire-and-forget
       const tryFind = async (slug: string) => {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from("products")
           .select("id, slug")
           .eq("slug", slug)
           .maybeSingle();
+        if (error) throw new Error(error.message);
         return data as { id: string; slug: string } | null;
       };
 
@@ -569,7 +571,7 @@ export function useCreateCatalogSku() {
       if (!found) found = await tryFind(maHang.toLowerCase());
 
       if (found) {
-        const { error } = await supabase
+        const { data: updated, error } = await supabase
           .from("products")
           .update({
             slug: maHang,
@@ -579,9 +581,16 @@ export function useCreateCatalogSku() {
             parent_sku: parentSku,
             is_active: true,
           } as never)
-          .eq("id", found.id);
-        if (error) throw error;
-        return { id: found.id, created: false, maHang };
+          .eq("id", found.id)
+          .select("id")
+          .single();
+        if (error) throw new Error(error.message);
+        if (!updated) throw new Error("Cập nhật mã thất bại (không có id).");
+        return {
+          id: (updated as { id: string }).id,
+          created: false,
+          maHang,
+        };
       }
 
       const { data, error } = await supabase
@@ -600,20 +609,25 @@ export function useCreateCatalogSku() {
             ? `Thêm mã mới (Parent: ${parentSku})`
             : "Thêm mã mới từ Quản lý danh mục",
         } as never)
-        .select("id")
+        .select("id, slug")
         .single();
+
       if (error) throw new Error(error.message);
-      return { id: (data as { id: string }).id, created: true, maHang };
+      const row = data as { id: string; slug: string } | null;
+      if (!row?.id) {
+        throw new Error("Thêm mã thất bại — Supabase không trả về id.");
+      }
+      return { id: row.id, created: true, maHang };
     },
     onSuccess: () => {
-      // Không await refetch nặng (variant-groups quét cả catalog) — tránh treo UI
-      void qc.invalidateQueries({ queryKey: ["new-products-strip"] });
-      void qc.invalidateQueries({ queryKey: ["variant-groups"] });
-      void qc.invalidateQueries({ queryKey: ["catalog-flag-admin"] });
-      // Catalog lớn — để nền, không chặn toast/đóng dialog
+      // Invalidate chạy nền — KHÔNG await (tránh treo UI / race đóng form)
       window.setTimeout(() => {
+        void qc.invalidateQueries({ queryKey: ["new-products-strip"] });
+        void qc.invalidateQueries({ queryKey: ["variant-groups"] });
+        void qc.invalidateQueries({ queryKey: ["catalog-flag-admin"] });
         void qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] });
-      }, 0);
+        void qc.invalidateQueries({ queryKey: ["products"] });
+      }, 150);
     },
   });
 }

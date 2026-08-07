@@ -379,7 +379,14 @@ function VariantManager() {
   };
 
   const onCreateSku = async () => {
+    if (createSkuM.isPending) return;
+    const maHang = normalizeOrderCodeText(addForm.maHang);
+    if (!maHang) {
+      toast.error("Nhập mã hàng trước khi thêm");
+      return;
+    }
     try {
+      // BẮT BUỘC await mutateAsync — chỉ đóng form SAU khi DB xong
       const res = await createSkuM.mutateAsync({
         maHang: addForm.maHang,
         tenHang: addForm.tenHang,
@@ -389,7 +396,7 @@ function VariantManager() {
       });
       toast.success(
         res.created
-          ? `Đã thêm mã ${res.maHang}`
+          ? `Đã lưu mã mới thành công: ${res.maHang}`
           : `Đã cập nhật mã ${res.maHang}`,
       );
       setAddOpen(false);
@@ -401,6 +408,7 @@ function VariantManager() {
         parentSku: "",
       });
       setLoaded(true);
+      // Refetch list nền — không await
       void groupsQ.refetch();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Lỗi thêm mã");
