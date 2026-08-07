@@ -71,16 +71,16 @@ const UPDATES = [
   },
   {
     code: "Q4_178",
-    short_name: "Q4 Cũ",
-    print_name: "Q4 Cũ",
-    name: "Q4 Cũ — 178 Hoàng Diệu",
+    short_name: "Q4 Mới",
+    print_name: "Q4 Mới",
+    name: "Kho Địa điểm kinh doanh 01 (Q4 Mới)",
     address: "178 Hoàng Diệu, Q.4, TP.HCM",
   },
   {
     code: "Q4_275",
-    short_name: "Q4 Mới",
-    print_name: "Q4 Mới",
-    name: "Q4 Mới — 275 Hoàng Diệu",
+    short_name: "Q4 Cũ",
+    print_name: "Q4 Cũ",
+    name: "Kho Địa điểm kinh doanh 06 (Q4 Cũ)",
     address: "275 Hoàng Diệu, Q.4, TP.HCM",
   },
 ];

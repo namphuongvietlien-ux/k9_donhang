@@ -13,7 +13,7 @@ export interface Warehouse {
   print_name?: string | null;
 }
 
-/** Nhãn cột / in: Q4 Cũ, Q4 Mới… (không dùng Q4_178) */
+/** Nhãn cột / in: Q4 Cũ, Q4 Mới… (không dùng Q4_178). Ưu tiên short_name. */
 export function warehouseLabel(
   w: Pick<Warehouse, "code" | "short_name" | "print_name" | "name">,
 ): string {

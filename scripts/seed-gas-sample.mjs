@@ -169,8 +169,8 @@ async function ensureWarehouses() {
     { code: "PH", name: "Kho Địa điểm kinh doanh 03", sort_order: 3 },
     { code: "Q5", name: "Kho Địa điểm kinh doanh 04", sort_order: 4 },
     { code: "Q1", name: "Kho Địa điểm kinh doanh 05", sort_order: 5 },
-    { code: "Q4_178", name: "Kho Địa điểm kinh doanh 01", sort_order: 6 },
-    { code: "Q4_275", name: "Kho Địa điểm kinh doanh 06", sort_order: 7 },
+    { code: "Q4_178", name: "Kho Địa điểm kinh doanh 01 (Q4 Mới)", sort_order: 6 },
+    { code: "Q4_275", name: "Kho Địa điểm kinh doanh 06 (Q4 Cũ)", sort_order: 7 },
   ];
   const { error } = await supabase.from("warehouses").upsert(seeds, {
     onConflict: "code",
@@ -727,20 +727,11 @@ async function seedSalesVouchers(wb, whByCode) {
   const iChiPhi = col((h) => h.includes("chi phí") || h.includes("chi phi"));
 
   function mapWh(raw) {
-    const s = String(raw || "").trim();
-    if (!s) return null;
-    const up = s.toUpperCase();
-    for (const [code, id] of whByCode.entries()) {
-      if (up === code || up.includes(code)) return { code, id };
-    }
-    // Kho Địa điểm kinh doanh 05 → try PH/Q8 heuristics from seed warehouses
-    const m = s.match(/(\d{2})/);
-    if (m) {
-      for (const [code, id] of whByCode.entries()) {
-        if (code.includes(m[1])) return { code, id };
-      }
-    }
-    return null;
+    const code = resolveWhCode(raw);
+    if (!code) return null;
+    const id = whByCode.get(code);
+    if (!id) return null;
+    return { code, id };
   }
 
   // Group by XB code or (invoice + branch + day)
@@ -810,6 +801,27 @@ async function seedSalesVouchers(wb, whByCode) {
   const list = [...groups.values()].filter((g) => g.lines.length > 0);
   console.log(`→ xuất bán groups: ${list.length}`);
 
+  const FORCE = args.includes("--force-sales");
+  if (FORCE && list.length) {
+    // Xóa phiếu seed cũ / trùng mã để map lại kho + dòng hàng
+    const codes = list.map((g) => g.voucher_code);
+    for (let i = 0; i < codes.length; i += 80) {
+      const slice = codes.slice(i, i + 80);
+      const { error } = await supabase
+        .from("sales_vouchers")
+        .delete()
+        .in("voucher_code", slice);
+      if (error) console.warn(`  ⚠ xóa cũ: ${error.message}`);
+    }
+    // Xóa luôn các XB-SEED-* lệch kho (-X)
+    const { error: e2 } = await supabase
+      .from("sales_vouchers")
+      .delete()
+      .like("voucher_code", "XB-SEED-%");
+    if (e2) console.warn(`  ⚠ xóa XB-SEED: ${e2.message}`);
+    console.log("→ --force-sales: đã xóa phiếu trùng / XB-SEED trước khi ghi lại");
+  }
+
   // Check existing
   const codes = list.map((g) => g.voucher_code);
   const existing = new Set();
@@ -829,6 +841,14 @@ async function seedSalesVouchers(wb, whByCode) {
       skipped++;
       continue;
     }
+    const total = g.lines.reduce((s, l) => s + (Number(l.line_total) || 0), 0);
+    const statusRaw = String(g.status || "").trim();
+    const status =
+      /hủy|huy|cancel/i.test(statusRaw)
+        ? "cancelled"
+        : /lưu|saved|đồng ý/i.test(statusRaw) || !statusRaw
+          ? "saved"
+          : statusRaw;
     const { data: voucher, error } = await supabase
       .from("sales_vouchers")
       .insert({
@@ -837,7 +857,8 @@ async function seedSalesVouchers(wb, whByCode) {
         warehouse_id: g.warehouse_id,
         warehouse_code: g.warehouse_code,
         warehouse_name: g.warehouse_name,
-        status: g.status === "Đã lưu" ? "saved" : g.status || "saved",
+        status,
+        total_amount: Math.round(total),
         created_by: g.created_by,
         created_at: g.created_at.toISOString(),
         updated_at: g.created_at.toISOString(),
@@ -872,6 +893,8 @@ async function seedSalesVouchers(wb, whByCode) {
     inserted++;
   }
   console.log(`✓ sales vouchers: +${inserted} (skip ${skipped})`);
+  const mapped = list.filter((g) => g.warehouse_code).length;
+  console.log(`  · có map kho: ${mapped}/${list.length}`);
 }
 
 function formatDayKey(d) {

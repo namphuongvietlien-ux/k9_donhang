@@ -1,6 +1,9 @@
 /**
  * Fallback nhãn + địa chỉ kho khi DB chưa có cột address/short_name.
- * Q4_178 = Q4 Cũ (178), Q4_275 = Q4 Mới (275).
+ *
+ * Theo nghiệp vụ K9 (xác nhận 2026-08):
+ * - Kho Địa điểm kinh doanh 06 (code Q4_275) = Q4 Cũ
+ * - Kho Địa điểm kinh doanh 01 (code Q4_178) = Q4 Mới
  */
 export const WAREHOUSE_PRINT_META: Record<
   string,
@@ -32,13 +35,13 @@ export const WAREHOUSE_PRINT_META: Record<
     address: "140 Nguyễn Văn Cừ, Q.1, TP.HCM",
   },
   Q4_178: {
-    short_name: "Q4 Cũ",
-    print_name: "Q4 Cũ",
+    short_name: "Q4 Mới",
+    print_name: "Q4 Mới",
     address: "178 Hoàng Diệu, Q.4, TP.HCM",
   },
   Q4_275: {
-    short_name: "Q4 Mới",
-    print_name: "Q4 Mới",
+    short_name: "Q4 Cũ",
+    print_name: "Q4 Cũ",
     address: "275 Hoàng Diệu, Q.4, TP.HCM",
   },
 };
