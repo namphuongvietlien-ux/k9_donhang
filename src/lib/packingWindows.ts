@@ -63,18 +63,20 @@ export const WEEKDAY_NAMES_VI = [
 export const DUP_TIME_MINUTES = 60;
 export const DUP_PRESAVE_MINUTES = 5;
 
-/** GAS STORE_MAP — code nội bộ (khớp warehouses.code) */
+/** GAS STORE_MAP — code nội bộ (khớp warehouses.code theo số nhà) */
 export const STORE_SHORT_CODES: Record<string, string> = {
   "Kho Địa điểm kinh doanh Q7": "Q7",
-  "Kho Địa điểm kinh doanh 01": "Q4_178",
+  /** KD 01 = Vĩnh Hội / 275 = Q4 Mới */
+  "Kho Địa điểm kinh doanh 01": "Q4_275",
   "Kho Địa điểm kinh doanh 02": "Q8",
   "Kho Địa điểm kinh doanh 03": "PH",
   "Kho Địa điểm kinh doanh 04": "Q5",
   "Kho Địa điểm kinh doanh 05": "Q1",
-  "Kho Địa điểm kinh doanh 06": "Q4_275",
+  /** KD 06 = 178 Hoàng Diệu = Q4 Cũ */
+  "Kho Địa điểm kinh doanh 06": "Q4_178",
 };
 
-/** Nhãn hiển thị UI — KD 01 = Q4 Mới, KD 06 = Q4 Cũ (không hiện Q4_178/Q4_275) */
+/** Nhãn hiển thị UI — KD 01 = Q4 Mới, KD 06 = Q4 Cũ */
 export const STORE_DISPLAY_LABELS: Record<string, string> = {
   "Kho Địa điểm kinh doanh Q7": "Q7",
   "Kho Địa điểm kinh doanh 01": "Q4 Mới",
@@ -616,19 +618,20 @@ export function formatShortStoreLabel(storeName: string): string {
   if (normalized.includes("phamhung") || normalized === "ph") return "PH";
   if (normalized.includes("q5") || normalized.includes("quan5")) return "Q5";
   if (normalized.includes("q1") || normalized.includes("quan1")) return "Q1";
-  // KD 01 / 178 Hoàng Diệu = Q4 Mới · KD 06 / 275 = Q4 Cũ
+  // KD 01 / 275·Vĩnh Hội = Q4 Mới · KD 06 / 178 = Q4 Cũ
   if (
-    normalized.includes("178") ||
+    normalized.includes("275") ||
+    normalized.includes("vinhhoi") ||
     normalized.includes("kinhdoanh01") ||
-    normalized === "q4_178" ||
+    normalized === "q4_275" ||
     normalized.includes("q4moi")
   ) {
     return "Q4 Mới";
   }
   if (
-    normalized.includes("275") ||
+    normalized.includes("178") ||
     normalized.includes("kinhdoanh06") ||
-    normalized === "q4_275" ||
+    normalized === "q4_178" ||
     normalized.includes("q4cu")
   ) {
     return "Q4 Cũ";

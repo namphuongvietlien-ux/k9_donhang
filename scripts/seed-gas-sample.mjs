@@ -79,8 +79,8 @@ const WH_RULES = [
   { code: "PH", re: /\bph\b|pham hung|phạm hùng|kinh doanh 03/i },
   { code: "Q5", re: /q5|nguyen van cu|nguyễn văn từ|nguyễn văn cừ|kinh doanh 04/i },
   { code: "Q1", re: /q1|tran hung dao|trần hưng đạo|an dong|kinh doanh 05/i },
-  { code: "Q4_178", re: /178|kinh doanh 01|q4 mới|q4 moi/i },
-  { code: "Q4_275", re: /275|vinh hoi|vĩnh hội|kinh doanh 06|q4 cũ|q4 cu/i },
+  { code: "Q4_275", re: /275|vinh hoi|vĩnh hội|kinh doanh 01|q4 mới|q4 moi/i },
+  { code: "Q4_178", re: /178|kinh doanh 06|q4 cũ|q4 cu/i },
 ];
 
 function resolveWhCode(raw) {
@@ -169,8 +169,8 @@ async function ensureWarehouses() {
     { code: "PH", name: "Kho Địa điểm kinh doanh 03", sort_order: 3 },
     { code: "Q5", name: "Kho Địa điểm kinh doanh 04", sort_order: 4 },
     { code: "Q1", name: "Kho Địa điểm kinh doanh 05", sort_order: 5 },
-    { code: "Q4_178", name: "Kho Địa điểm kinh doanh 01 (Q4 Mới)", sort_order: 6 },
-    { code: "Q4_275", name: "Kho Địa điểm kinh doanh 06 (Q4 Cũ)", sort_order: 7 },
+    { code: "Q4_275", name: "Kho Địa điểm kinh doanh 01 (Q4 Mới)", sort_order: 6 },
+    { code: "Q4_178", name: "Kho Địa điểm kinh doanh 06 (Q4 Cũ)", sort_order: 7 },
   ];
   const { error } = await supabase.from("warehouses").upsert(seeds, {
     onConflict: "code",

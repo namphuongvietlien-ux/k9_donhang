@@ -13,16 +13,18 @@ export interface Warehouse {
   print_name?: string | null;
 }
 
-/** Nhãn cột / in: Q4 Cũ, Q4 Mới… (không dùng Q4_178 / Q4_275). */
+/** Nhãn cột / in: Q4 Cũ, Q4 Mới… (không bao giờ hiện Q4_178 / Q4_275). */
 export function warehouseLabel(
   w: Pick<Warehouse, "code" | "short_name" | "print_name" | "name">,
 ): string {
   const enriched = enrichWarehouseMeta(w);
-  return (
+  const label =
     String(enriched?.short_name || "").trim() ||
     String(enriched?.print_name || "").trim() ||
-    w.code
-  );
+    w.code;
+  if (label === "Q4_178") return "Q4 Cũ";
+  if (label === "Q4_275") return "Q4 Mới";
+  return label;
 }
 
 export function useWarehouses() {

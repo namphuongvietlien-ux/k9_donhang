@@ -25,12 +25,13 @@ UPDATE public.warehouses SET short_name='Q1', print_name='Q1',
   name='Kho Địa điểm kinh doanh 05',
   address='140 Nguyễn Văn Cừ, Q.1, TP.HCM' WHERE code='Q1';
 
--- ĐÚNG: KD 06 (Q4_275) = Q4 Cũ · KD 01 (Q4_178) = Q4 Mới
-UPDATE public.warehouses SET short_name='Q4 Mới', print_name='Q4 Mới',
-  name='Kho Địa điểm kinh doanh 01 (Q4 Mới)', address='178 Hoàng Diệu, Q.4, TP.HCM'
-WHERE code='Q4_178';
+-- ĐÚNG: KD 01 (Q4_275) = Q4 Mới · KD 06 (Q4_178) = Q4 Cũ
 UPDATE public.warehouses SET short_name='Q4 Cũ', print_name='Q4 Cũ',
-  name='Kho Địa điểm kinh doanh 06 (Q4 Cũ)', address='275 Hoàng Diệu, Q.4, TP.HCM'
+  name='Kho Địa điểm kinh doanh 06 (Q4 Cũ)', address='178 đường Hoàng Diệu, Phường Khánh Hội, TPHCM'
+WHERE code='Q4_178';
+UPDATE public.warehouses SET short_name='Q4 Mới', print_name='Q4 Mới',
+  name='Kho Địa điểm kinh doanh 01 (Q4 Mới)',
+  address='L22-24 Cư Xá Vĩnh Hội, đường Hoàng Diệu, phường Khánh Hội, TP Hồ Chí Minh, Việt Nam.'
 WHERE code='Q4_275';
 
 ALTER TABLE public.profiles

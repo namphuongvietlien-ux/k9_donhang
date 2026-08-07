@@ -34,8 +34,8 @@ const supabase = createClient(url, key, {
 });
 
 const NAME_BY_CODE = {
-  Q4_275: "Kho Địa điểm kinh doanh 06 (Q4 Cũ)",
-  Q4_178: "Kho Địa điểm kinh doanh 01 (Q4 Mới)",
+  Q4_275: "Kho Địa điểm kinh doanh 01 (Q4 Mới)",
+  Q4_178: "Kho Địa điểm kinh doanh 06 (Q4 Cũ)",
   Q7: "Kho Địa điểm kinh doanh Q7",
   Q8: "Kho Địa điểm kinh doanh 02",
   PH: "Kho Địa điểm kinh doanh 03",

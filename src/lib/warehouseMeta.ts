@@ -1,11 +1,11 @@
 /**
- * Fallback nhãn + địa chỉ kho khi DB chưa có cột address/short_name.
+ * Fallback nhãn + địa chỉ kho.
  *
- * Theo nghiệp vụ K9 (xác nhận 2026-08):
- * - Kho Địa điểm kinh doanh 06 (code Q4_275) = Q4 Cũ
- * - Kho Địa điểm kinh doanh 01 (code Q4_178) = Q4 Mới
+ * Nghiệp vụ K9 (bảng địa chỉ chính thức 2026-08):
+ * - KD 01 · Vĩnh Hội / 275 Hoàng Diệu · code Q4_275 = Q4 Mới
+ * - KD 06 · 178 Hoàng Diệu · code Q4_178 = Q4 Cũ
  *
- * Code DB vẫn là Q4_178 / Q4_275 — UI luôn hiện Q4 Mới / Q4 Cũ.
+ * Code DB vẫn Q4_178 / Q4_275 — UI luôn hiện Q4 Mới / Q4 Cũ (không hiện code).
  */
 export const WAREHOUSE_PRINT_META: Record<
   string,
@@ -14,41 +14,45 @@ export const WAREHOUSE_PRINT_META: Record<
   Q7: {
     short_name: "Q7",
     print_name: "Q7",
-    address: "Kho Q7 — Lê Văn Lương, P. Tân Hưng, Q.7, TP.HCM",
+    address:
+      "269A đường Lê Văn Lương, P. Tân Hưng, TP.HCM, Việt Nam",
   },
   Q8: {
     short_name: "Q8",
     print_name: "Q8",
-    address: "86 Dương Bá Trạc, Q.8, TP.HCM",
+    address: "86A-88 đường Dương Bá Trạc, P. Chánh Hưng, TP.HCM",
   },
   PH: {
     short_name: "PH",
     print_name: "PH",
-    address: "237 Phạm Hùng, Q.8, TP.HCM",
+    address: "237-239 Phạm Hùng, P.Chánh Hưng, TP.HCM",
   },
   Q5: {
     short_name: "Q5",
     print_name: "Q5",
-    address: "7 Trần Hưng Đạo, Q.5, TP.HCM",
+    address: "7 Trần Hưng Đạo, Phường An Đông, TP.Hồ Chí Minh",
   },
   Q1: {
     short_name: "Q1",
     print_name: "Q1",
-    address: "140 Nguyễn Văn Cừ, Q.1, TP.HCM",
+    address: "140 đường Nguyễn Văn Cừ, P. Cầu Ông Lãnh, TP.HCM",
   },
+  /** 178 Hoàng Diệu = KD 06 = Q4 Cũ */
   Q4_178: {
-    short_name: "Q4 Mới",
-    print_name: "Q4 Mới",
-    address: "178 Hoàng Diệu, Q.4, TP.HCM",
-  },
-  Q4_275: {
     short_name: "Q4 Cũ",
     print_name: "Q4 Cũ",
-    address: "275 Hoàng Diệu, Q.4, TP.HCM",
+    address: "178 đường Hoàng Diệu, Phường Khánh Hội, TPHCM",
+  },
+  /** Vĩnh Hội / 275 = KD 01 = Q4 Mới */
+  Q4_275: {
+    short_name: "Q4 Mới",
+    print_name: "Q4 Mới",
+    address:
+      "L22-24 Cư Xá Vĩnh Hội, đường Hoàng Diệu, phường Khánh Hội, TP Hồ Chí Minh, Việt Nam.",
   },
 };
 
-/** Tên đầy đủ GAS → nhãn hiển thị (không dùng Q4_178 / Q4_275 trên UI). */
+/** Tên đầy đủ GAS → nhãn hiển thị */
 export const STORE_DISPLAY_LABELS: Record<string, string> = {
   "Kho Địa điểm kinh doanh Q7": "Q7",
   "Kho Địa điểm kinh doanh 01": "Q4 Mới",
@@ -59,7 +63,7 @@ export const STORE_DISPLAY_LABELS: Record<string, string> = {
   "Kho Địa điểm kinh doanh 06": "Q4 Cũ",
 };
 
-/** Nhãn UI bắt buộc theo code — ghi đè short_name sai trong DB (vd còn Q4_275). */
+/** Nhãn UI bắt buộc theo code — ghi đè short_name sai trong DB. */
 export function forcedWarehouseShortName(
   code: string | null | undefined,
 ): string | null {
@@ -79,16 +83,16 @@ export function enrichWarehouseMeta<
   if (!w?.code) return (w as T) || null;
   const fb = WAREHOUSE_PRINT_META[w.code];
   if (!fb) return w;
-  // Luôn ép short/print theo bảng chuẩn — tránh DB còn Q4_178/Q4_275 làm nhãn
+  // Luôn ép short/print/address theo bảng chuẩn
   return {
     ...w,
     short_name: fb.short_name,
     print_name: fb.print_name,
-    address: w.address || fb.address,
+    address: fb.address,
   };
 }
 
-/** Nhãn ngắn luôn ưu tiên Q4 Cũ / Q4 Mới (không hiện Q4_275 / Q4_178). */
+/** Nhãn ngắn: Q4 Cũ / Q4 Mới — không bao giờ trả Q4_178 / Q4_275. */
 export function warehouseShortLabel(
   w:
     | {
@@ -103,14 +107,15 @@ export function warehouseShortLabel(
   if (!w) return "—";
   const forced = forcedWarehouseShortName(w.code);
   if (forced) return forced;
-  const e = enrichWarehouseMeta(w);
-  const label =
-    String(e?.short_name || "").trim() ||
-    String(e?.print_name || "").trim() ||
+
+  const raw =
+    String(w.short_name || "").trim() ||
+    String(w.print_name || "").trim() ||
     String(w.code || "").trim() ||
     "—";
-  // Phòng trường hợp code lạ nhưng short_name vẫn là Q4_xxx
-  if (label === "Q4_178") return "Q4 Mới";
-  if (label === "Q4_275") return "Q4 Cũ";
-  return label;
+
+  // Code thô còn sót trên UI
+  if (raw === "Q4_178") return "Q4 Cũ";
+  if (raw === "Q4_275") return "Q4 Mới";
+  return raw;
 }
