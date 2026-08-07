@@ -50,6 +50,11 @@ import {
   filterCatalogSuggestions,
   scoreCatalogItem,
 } from "@/lib/catalogSearch";
+import { checkCatalogAddBlocked } from "@/lib/catalogAddGuards";
+import {
+  CatalogSuggestItem,
+  CatalogSuggestList,
+} from "@/components/admin/CatalogSuggestDropdown";
 import { useAuth } from "@/contexts/AuthContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -105,6 +110,9 @@ interface CatalogHit {
   barcode_2: string | null;
   price: number;
   parent_sku?: string | null;
+  is_locked?: boolean;
+  is_out_stock?: boolean;
+  is_new?: boolean;
 }
 
 function lineAmount(l: CartLine): number {
@@ -207,6 +215,9 @@ export default function BanKemDvPanel() {
   const catalogList: CatalogHit[] = useMemo(() => {
     const rows = (catalog?.products || []) as (CatalogProductRow & {
       parent_sku?: string | null;
+      is_locked?: boolean;
+      is_out_stock?: boolean;
+      is_new?: boolean;
     })[];
     return rows
       .filter((p) => p.slug)
@@ -220,6 +231,9 @@ export default function BanKemDvPanel() {
         barcode_2: p.barcode_2 || null,
         price: Number(p.price) || 0,
         parent_sku: p.parent_sku || null,
+        is_locked: !!p.is_locked,
+        is_out_stock: !!p.is_out_stock,
+        is_new: !!p.is_new,
       }));
   }, [catalog]);
 
@@ -299,6 +313,17 @@ export default function BanKemDvPanel() {
 
   const addProduct = (p: CatalogHit) => {
     if (!invoiceLocked) return;
+    const block = checkCatalogAddBlocked(p);
+    if (block.blocked) {
+      toast({
+        title: block.title,
+        description: block.description || undefined,
+        variant: "destructive",
+      });
+      setScan("");
+      scanRef.current?.focus();
+      return;
+    }
     const opts =
       getSkuUnitOptions(skuUnitIndex, p.slug).length > 0
         ? getSkuUnitOptions(skuUnitIndex, p.slug)
@@ -1074,37 +1099,31 @@ export default function BanKemDvPanel() {
         </div>
 
         {scan.trim() && locked && (
-          <div className="absolute z-20 left-4 right-4 top-[6.5rem] max-h-56 overflow-auto rounded-md border bg-popover shadow-lg">
+          <CatalogSuggestList className="left-4 right-4 top-[6.5rem] mt-0 z-20">
             {suggestions.length === 0 ? (
               <div className="p-3 text-sm text-muted-foreground">
                 Không tìm thấy.
               </div>
             ) : (
               suggestions.map((p) => (
-                <button
+                <CatalogSuggestItem
                   key={p.id}
-                  type="button"
-                  className="w-full text-left px-3 py-2 hover:bg-accent border-b last:border-0"
-                  onClick={() => addProduct(p)}
-                >
-                  <div className="flex justify-between gap-2">
-                    <span className="font-mono text-sm font-semibold text-primary uppercase">
-                      {normalizeOrderCodeText(p.slug)}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {p.unit || "cái"} · {formatMoney(p.price)}₫
-                    </span>
-                  </div>
-                  <div className="text-sm truncate">{p.name}</div>
-                  {p.barcode ? (
-                    <div className="font-mono text-[11px] text-muted-foreground">
-                      MV: {p.barcode}
-                    </div>
-                  ) : null}
-                </button>
+                  product={p}
+                  unitLabel={p.unit || "cái"}
+                  barcodeLabel={
+                    [p.barcode, p.barcode_2].filter(Boolean).join(" · ") || "—"
+                  }
+                  extraMeta={
+                    <>
+                      {" "}
+                      · {formatMoney(p.price)}₫
+                    </>
+                  }
+                  onSelect={() => addProduct(p)}
+                />
               ))
             )}
-          </div>
+          </CatalogSuggestList>
         )}
 
         <div className={cn(excelTableWrap, "max-h-[min(48vh,480px)]")}>

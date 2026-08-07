@@ -26,6 +26,11 @@ import {
   filterCatalogSuggestions,
   scoreCatalogItem,
 } from "@/lib/catalogSearch";
+import { checkCatalogAddBlocked } from "@/lib/catalogAddGuards";
+import {
+  CatalogSuggestItem,
+  CatalogSuggestList,
+} from "@/components/admin/CatalogSuggestDropdown";
 import {
   inferPackingDayFromCreatedAt,
   getPackingSaveBanner,
@@ -267,10 +272,11 @@ const CreateWarehouseOrderForm = forwardRef<
   );
 
   const addProduct = (p: CatalogHit, preferredBarcode?: string) => {
-    if (p.is_locked) {
+    const block = checkCatalogAddBlocked(p);
+    if (block.blocked) {
       toast({
-        title: "Mã đã khóa",
-        description: `${p.slug} đang khóa — không thêm vào phiếu đặt hàng.`,
+        title: block.title,
+        description: block.description || undefined,
         variant: "destructive",
       });
       setScan("");
@@ -643,7 +649,7 @@ const CreateWarehouseOrderForm = forwardRef<
         </div>
 
         {scan.trim() && (
-          <div className="absolute z-20 left-4 right-4 top-[7.5rem] max-h-64 overflow-auto rounded-md border bg-popover shadow-lg">
+          <CatalogSuggestList className="left-4 right-4 top-[7.5rem] mt-0">
             {catalogLoading ? (
               <div className="p-3 text-sm text-muted-foreground flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin" /> Đang tải danh mục
@@ -679,45 +685,23 @@ const CreateWarehouseOrderForm = forwardRef<
                 const mvLabel =
                   [p.barcode, p.barcode_2].filter(Boolean).join(" · ") || "—";
                 return (
-                  <button
+                  <CatalogSuggestItem
                     key={p.id}
-                    type="button"
-                    className={cn(
-                      "w-full text-left px-3 py-1.5 hover:bg-accent border-b last:border-0",
-                      p.is_locked && "opacity-60",
-                      p.is_new && "bg-emerald-50/80",
-                    )}
-                    onClick={() => addProduct(p)}
-                  >
-                    <div className="text-sm font-bold truncate">
-                      <span className="font-mono text-teal-800 uppercase">
-                        {normalizeOrderCodeText(p.slug)}
-                      </span>
-                      {" — "}
-                      {p.name}
-                      {p.is_locked ? (
-                        <span className="ml-1 text-[10px] text-red-700 font-bold">
-                          KHÓA
-                        </span>
-                      ) : null}
-                      {p.is_new ? (
-                        <span className="ml-1 text-[10px] text-emerald-700 font-bold">
-                          MỚI
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="text-xs text-gray-500 truncate">
-                      ĐVT: {dvtLabel} • Mã vạch: {mvLabel} • Tồn:{" "}
-                      {ton != null ? ton : "—"}
-                      {p.parent_sku
-                        ? ` • Parent: ${normalizeOrderCodeText(p.parent_sku)}`
-                        : ""}
-                    </div>
-                  </button>
+                    product={p}
+                    unitLabel={dvtLabel}
+                    barcodeLabel={mvLabel}
+                    extraMeta={
+                      <>
+                        {" "}
+                        • Tồn: {ton != null ? ton : "—"}
+                      </>
+                    }
+                    onSelect={() => addProduct(p)}
+                  />
                 );
               })
             )}
-          </div>
+          </CatalogSuggestList>
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">

@@ -44,6 +44,11 @@ import {
   type CatalogProductRow,
 } from "@/lib/catalogUnitBarcode";
 import { filterCatalogSuggestions } from "@/lib/catalogSearch";
+import { checkCatalogAddBlocked } from "@/lib/catalogAddGuards";
+import {
+  CatalogSuggestItem,
+  CatalogSuggestList,
+} from "@/components/admin/CatalogSuggestDropdown";
 import {
   getPackingSaveBanner,
   normalizeOrderCodeText,
@@ -228,10 +233,11 @@ export default function WarehouseOrderDetail({
   };
 
   const pickProduct = (p: CatalogHit, preferredBarcode?: string) => {
-    if (p.is_locked) {
+    const block = checkCatalogAddBlocked(p);
+    if (block.blocked) {
       toast({
-        title: "Mã đã khóa",
-        description: `${normalizeOrderCodeText(p.slug)} đang khóa — không thêm vào phiếu.`,
+        title: block.title,
+        description: block.description || undefined,
         variant: "destructive",
       });
       focusScan();
@@ -271,6 +277,19 @@ export default function WarehouseOrderDetail({
       toast({
         title: "Chưa chọn mã",
         description: "Tìm và chọn sản phẩm trước khi thêm.",
+        variant: "destructive",
+      });
+      focusScan();
+      return;
+    }
+    const catalogHit = catalogList.find(
+      (p) => normalizeOrderCodeText(p.slug) === slug,
+    );
+    const block = checkCatalogAddBlocked(catalogHit);
+    if (block.blocked) {
+      toast({
+        title: block.title,
+        description: block.description || undefined,
         variant: "destructive",
       });
       focusScan();
@@ -701,7 +720,7 @@ export default function WarehouseOrderDetail({
                 autoComplete="off"
               />
               {suggestOpen && scan.trim() && (
-                <div className="absolute z-40 left-0 right-0 top-full mt-1 max-h-56 overflow-auto rounded-md border bg-popover shadow-lg">
+                <CatalogSuggestList>
                   {suggestions.length === 0 ? (
                     <div className="p-3 text-sm text-muted-foreground">
                       Không tìm thấy sản phẩm phù hợp.
@@ -713,36 +732,21 @@ export default function WarehouseOrderDetail({
                         getQty(p.barcode || "", p.unit) ??
                         getQty(p.barcode_2 || "", p.unit_2);
                       return (
-                        <button
+                        <CatalogSuggestItem
                           key={p.id}
-                          type="button"
-                          className={cn(
-                            "w-full text-left px-3 py-2 hover:bg-accent border-b last:border-0",
-                            p.is_locked && "opacity-60",
-                          )}
-                          onClick={() => pickProduct(p)}
-                        >
-                          <div className="text-sm font-bold truncate">
-                            <span className="font-mono text-teal-800 uppercase">
-                              {normalizeOrderCodeText(p.slug)}
-                            </span>
-                            {" — "}
-                            {p.name}
-                            {p.is_locked ? (
-                              <span className="ml-1 text-[10px] text-red-700">
-                                KHÓA
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="text-xs text-muted-foreground truncate">
-                            ĐVT: {p.unit || "—"} · MV: {p.barcode || "—"} · Tồn:{" "}
-                            {ton != null ? ton : "—"}
-                          </div>
-                        </button>
+                          product={p}
+                          extraMeta={
+                            <>
+                              {" "}
+                              · Tồn: {ton != null ? ton : "—"}
+                            </>
+                          }
+                          onSelect={() => pickProduct(p)}
+                        />
                       );
                     })
                   )}
-                </div>
+                </CatalogSuggestList>
               )}
             </div>
 
