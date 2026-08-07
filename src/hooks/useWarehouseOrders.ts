@@ -17,6 +17,7 @@ import { checkDuplicateBeforeSave } from "@/hooks/useOrderImport";
 import { enrichWarehouseMeta, warehouseShortLabel } from "@/lib/warehouseMeta";
 import { notifyWarehouseEvent } from "@/lib/telegramNotify";
 import { toStockUnitKey } from "@/lib/stockKeys";
+import { ensureProductsForOrderLines } from "@/lib/ensureOrderProducts";
 
 export { warehouseShortLabel };
 
@@ -462,6 +463,8 @@ export type SaveOrderInput = {
     price?: number;
     barcode?: string | null;
     unit?: string | null;
+    /** Có sẵn từ catalog; mã ngoài để null → auto-upsert */
+    productId?: string | null;
   }[];
 };
 
@@ -493,6 +496,8 @@ export function useWarehouseOrderMutations() {
       qc.invalidateQueries({ queryKey: ["week-orders"] }),
       qc.invalidateQueries({ queryKey: ["stock-on-hand"] }),
       qc.invalidateQueries({ queryKey: ["dashboard-stats"] }),
+      qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] }),
+      qc.invalidateQueries({ queryKey: ["products"] }),
     ]);
   };
 
@@ -501,6 +506,17 @@ export function useWarehouseOrderMutations() {
     mutationFn: async (input: SaveOrderInput) => {
       const valid = input.lines.filter((l) => l.quantity > 0);
       if (!valid.length) throw new Error("Cần ít nhất 1 dòng hàng.");
+
+      for (const l of valid) {
+        const sku = normalizeOrderCodeText(l.productSlug || "");
+        const name = String(l.productName || "").trim();
+        if (!sku) {
+          throw new Error("Mỗi dòng cần Mã hàng (SKU).");
+        }
+        if (!name) {
+          throw new Error(`Thiếu tên hàng cho mã ${sku}.`);
+        }
+      }
 
       const kind = input.loaiPhieu === "DonHang" ? "DH" : "DC";
 
@@ -511,6 +527,17 @@ export function useWarehouseOrderMutations() {
       }
       if (!sourceWarehouseId) throw new Error("Thiếu kho xuất.");
       if (!input.destWarehouseId) throw new Error("Thiếu kho nhận.");
+
+      // Cách 2: mã ngoài → upsert products (is_new) trước khi insert order_items
+      const productIds = await ensureProductsForOrderLines(
+        valid.map((l) => ({
+          productSlug: l.productSlug,
+          productName: l.productName,
+          barcode: l.barcode,
+          unit: l.unit,
+          productId: l.productId,
+        })),
+      );
 
       const skuQty: Record<string, number> = {};
       let totalQty = 0;
@@ -570,27 +597,47 @@ export function useWarehouseOrderMutations() {
       }
 
       const orderId = (order as { id: string }).id;
-      const items = valid.map((l) => ({
-        order_id: orderId,
-        product_name: l.productName,
-        product_slug: l.productSlug,
-        product_image: null,
-        price: l.price || 0,
-        quantity: l.quantity,
-        qty_requested: l.quantity,
-        qty_packed: null,
-        qty_received: null,
-        shipping_fee: 0,
-        barcode: l.barcode || null,
-        unit: l.unit || null,
-      }));
+      const items = valid.map((l) => {
+        const slug = normalizeOrderCodeText(l.productSlug || "");
+        const pid = productIds.get(slug) || l.productId || null;
+        return {
+          order_id: orderId,
+          product_name: l.productName,
+          product_slug: l.productSlug,
+          product_image: null,
+          price: l.price || 0,
+          quantity: l.quantity,
+          qty_requested: l.quantity,
+          qty_packed: null,
+          qty_received: null,
+          shipping_fee: 0,
+          barcode: l.barcode || null,
+          unit: l.unit || null,
+          ...(pid ? { product_id: pid } : {}),
+        };
+      });
 
       const { error: itemsErr } = await supabase
         .from("order_items")
         .insert(items as never);
       if (itemsErr) {
-        await supabase.from("orders").delete().eq("id", orderId);
-        throw new Error(itemsErr.message);
+        // Fallback: schema chưa có cột product_id
+        if (/product_id/i.test(itemsErr.message || "")) {
+          const stripped = items.map(({ product_id: _pid, ...rest }) => {
+            void _pid;
+            return rest;
+          });
+          const { error: retryErr } = await supabase
+            .from("order_items")
+            .insert(stripped as never);
+          if (retryErr) {
+            await supabase.from("orders").delete().eq("id", orderId);
+            throw new Error(retryErr.message);
+          }
+        } else {
+          await supabase.from("orders").delete().eq("id", orderId);
+          throw new Error(itemsErr.message);
+        }
       }
 
       const code = (order as { order_code: string }).order_code;
@@ -717,6 +764,80 @@ export function useWarehouseOrderMutations() {
     onSuccess: invalidate,
   });
 
+  /**
+   * Đổi ĐVT trên chi tiết / soạn hàng — sync barcode, giữ status packing.
+   * Không gọi revertToPendingIfProcessing (tránh xóa qty_packed).
+   */
+  const updateItemUnit = useMutation({
+    mutationFn: async (input: {
+      itemId: string;
+      unit: string;
+      barcode: string | null;
+      /** Ghi chú audit gắn line_notes */
+      auditNote?: string | null;
+    }) => {
+      const unit = String(input.unit || "").trim();
+      if (!unit) throw new Error("Thiếu ĐVT.");
+
+      const { data: row, error: loadErr } = await supabase
+        .from("order_items")
+        .select("id, order_id, line_notes, unit, barcode, product_slug")
+        .eq("id", input.itemId)
+        .single();
+      if (loadErr) throw loadErr;
+
+      const item = row as {
+        order_id: string;
+        line_notes: string | null;
+        unit: string | null;
+        barcode: string | null;
+        product_slug: string | null;
+      };
+
+      const { data: ord, error: ordErr } = await supabase
+        .from("orders")
+        .select("status")
+        .eq("id", item.order_id)
+        .single();
+      if (ordErr) throw ordErr;
+      const st = (ord as { status: string }).status;
+      if (st === "completed" || st === "cancelled") {
+        throw new Error("Không sửa ĐVT phiếu đã nhận / đã hủy.");
+      }
+
+      let lineNotes = item.line_notes || null;
+      if (input.auditNote) {
+        lineNotes = [item.line_notes, input.auditNote]
+          .map((s) => String(s || "").trim())
+          .filter(Boolean)
+          .join("\n");
+      }
+
+      const patch: Record<string, unknown> = {
+        unit,
+        barcode: input.barcode,
+      };
+      if (input.auditNote) patch.line_notes = lineNotes;
+
+      const { error } = await supabase
+        .from("order_items")
+        .update(patch as never)
+        .eq("id", input.itemId);
+      if (error) {
+        if (/barcode|unit|line_notes/i.test(error.message || "")) {
+          const { error: retry } = await supabase
+            .from("order_items")
+            .update({ unit, barcode: input.barcode } as never)
+            .eq("id", input.itemId);
+          if (retry) throw retry;
+        } else {
+          throw error;
+        }
+      }
+    },
+    onSuccess: invalidate,
+  });
+
   const addItem = useMutation({
     mutationFn: async (input: {
       orderId: string;
@@ -726,13 +847,31 @@ export function useWarehouseOrderMutations() {
       price?: number;
       barcode?: string | null;
       unit?: string | null;
+      productId?: string | null;
     }) => {
       if (input.quantity <= 0) throw new Error("Số lượng phải > 0");
+      const slug = normalizeOrderCodeText(input.productSlug || "");
+      const name = String(input.productName || "").trim();
+      if (!slug) throw new Error("Thiếu Mã hàng (SKU).");
+      if (!name) throw new Error(`Thiếu tên hàng cho mã ${slug}.`);
+
       await revertToPendingIfProcessing(input.orderId);
-      const { error } = await supabase.from("order_items").insert({
+
+      const productIds = await ensureProductsForOrderLines([
+        {
+          productSlug: slug,
+          productName: name,
+          barcode: input.barcode,
+          unit: input.unit,
+          productId: input.productId,
+        },
+      ]);
+      const pid = productIds.get(slug) || input.productId || null;
+
+      const row: Record<string, unknown> = {
         order_id: input.orderId,
-        product_name: input.productName,
-        product_slug: input.productSlug || null,
+        product_name: name,
+        product_slug: slug,
         price: input.price || 0,
         quantity: input.quantity,
         qty_requested: input.quantity,
@@ -740,8 +879,23 @@ export function useWarehouseOrderMutations() {
         shipping_fee: 0,
         barcode: input.barcode || null,
         unit: input.unit || null,
-      } as never);
-      if (error) throw error;
+      };
+      if (pid) row.product_id = pid;
+
+      const { error } = await supabase
+        .from("order_items")
+        .insert(row as never);
+      if (error) {
+        if (/product_id/i.test(error.message || "") && pid) {
+          delete row.product_id;
+          const { error: retryErr } = await supabase
+            .from("order_items")
+            .insert(row as never);
+          if (retryErr) throw retryErr;
+        } else {
+          throw error;
+        }
+      }
     },
     onSuccess: invalidate,
   });
@@ -835,7 +989,12 @@ export function useWarehouseOrderMutations() {
   const savePackingQty = useMutation({
     mutationFn: async (input: {
       orderId: string;
-      lines: { itemId: string; qtyPacked: number }[];
+      lines: {
+        itemId: string;
+        qtyPacked: number;
+        unit?: string | null;
+        barcode?: string | null;
+      }[];
     }) => {
       const { data: ord, error: loadErr } = await supabase
         .from("orders")
@@ -849,9 +1008,18 @@ export function useWarehouseOrderMutations() {
       }
 
       for (const line of input.lines) {
+        const patch: Record<string, unknown> = {
+          qty_packed: line.qtyPacked,
+        };
+        if (line.unit != null && String(line.unit).trim()) {
+          patch.unit = String(line.unit).trim();
+        }
+        if (line.barcode !== undefined) {
+          patch.barcode = line.barcode;
+        }
         const { error } = await supabase
           .from("order_items")
-          .update({ qty_packed: line.qtyPacked } as never)
+          .update(patch as never)
           .eq("id", line.itemId);
         if (error) throw error;
       }
@@ -1037,6 +1205,7 @@ export function useWarehouseOrderMutations() {
     createOrder: saveOrder,
     savePacking: savePackingQty,
     updateItemQty,
+    updateItemUnit,
     addItem,
     removeItem,
     cancelOrder,

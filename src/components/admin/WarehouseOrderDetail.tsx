@@ -120,6 +120,7 @@ export default function WarehouseOrderDetail({
   const { data: order, isLoading } = useWarehouseOrder(orderId);
   const {
     updateItemQty,
+    updateItemUnit,
     addItem,
     removeItem,
     cancelOrder,
@@ -127,8 +128,12 @@ export default function WarehouseOrderDetail({
     setOrderStatus,
     savePacking,
   } = useWarehouseOrderMutations();
-  const { role } = useAuth();
+  const { role, username, user } = useAuth();
   const isAdmin = role === "super_admin" || role === "manager";
+  const actorLabel =
+    username ||
+    user?.email?.split("@")[0] ||
+    "User";
   const { data: catalog } = useCatalogForImport();
   const { data: q7 } = usePackingSourceWarehouse();
   const stockWhId =
@@ -139,6 +144,11 @@ export default function WarehouseOrderDetail({
   const [packed, setPacked] = useState<Record<string, number>>({});
   /** Draft SL yêu cầu — chỉ ghi DB khi bấm Lưu xác nhận (tab Quản Lý) */
   const [reqDraft, setReqDraft] = useState<Record<string, number>>({});
+  /** Draft ĐVT / MV khi đổi trên lưới (optimistic + gửi kèm Lưu soạn) */
+  const [unitDraft, setUnitDraft] = useState<
+    Record<string, { unit: string; barcode: string }>
+  >({});
+  const [unitBusyId, setUnitBusyId] = useState<string | null>(null);
   const [savingConfirm, setSavingConfirm] = useState(false);
   const [scan, setScan] = useState("");
   const [suggestOpen, setSuggestOpen] = useState(false);
@@ -206,6 +216,7 @@ export default function WarehouseOrderDetail({
     }
     setPacked(initPack);
     setReqDraft(initReq);
+    setUnitDraft({});
   }, [order]);
 
   const clearAddForm = () => {
@@ -276,14 +287,22 @@ export default function WarehouseOrderDetail({
 
   const handleAdd = async () => {
     const slug = normalizeOrderCodeText(newSlug) || normalizeOrderCodeText(scan);
-    const name = newName.trim() || slug;
-    if (!slug && !name) {
+    const name = newName.trim();
+    if (!slug) {
       toast({
         title: "Chưa chọn mã",
         description: "Tìm và chọn sản phẩm trước khi thêm.",
         variant: "destructive",
       });
       focusScan();
+      return;
+    }
+    if (!name) {
+      toast({
+        title: "Thiếu tên hàng",
+        description: `Điền tên cho mã ${slug} (mã ngoài / hàng mới).`,
+        variant: "destructive",
+      });
       return;
     }
     const catalogHit = catalogList.find(
@@ -375,11 +394,24 @@ export default function WarehouseOrderDetail({
       });
       return;
     }
+    // Mã ngoài: điền form để user bổ sung tên / ĐVT / MV rồi thêm
+    setNewSlug(q);
+    setNewName("");
+    setNewUnit("cái");
+    setNewBarcode("");
+    setNewPrice(0);
+    setNewQty(1);
+    setSuggestOpen(false);
     toast({
-      title: "Không tìm thấy mã",
-      description: scan.trim(),
-      variant: "destructive",
+      title: "Mã ngoài — hàng mới",
+      description: `${q}: điền Tên hàng rồi Enter / Thêm. Hệ thống sẽ tạo SP (is_new) khi lưu.`,
     });
+    window.setTimeout(() => {
+      const el = document.querySelector<HTMLInputElement>(
+        'input[data-add-name="1"]',
+      );
+      el?.focus();
+    }, 50);
   };
 
   const onAddUnitChange = (dvt: string) => {
@@ -402,6 +434,71 @@ export default function WarehouseOrderDetail({
   }
 
   const locked = order.status === "completed" || order.status === "cancelled";
+  /** pending / processing — cho sửa ĐVT; completed / cancelled khóa cứng */
+  const unitEditable = !locked;
+
+  const lineUnit = (it: { id: string; unit?: string | null }) =>
+    unitDraft[it.id]?.unit ?? it.unit ?? "";
+  const lineBarcode = (it: { id: string; barcode?: string | null }) =>
+    unitDraft[it.id]?.barcode ?? it.barcode ?? "";
+
+  const onLineUnitChange = async (
+    it: {
+      id: string;
+      product_slug: string | null;
+      unit?: string | null;
+      barcode?: string | null;
+    },
+    nextUnit: string,
+  ) => {
+    const opts = getSkuUnitOptions(skuUnitIndex, it.product_slug || "");
+    const match = resolveUnitOption(opts, nextUnit);
+    const newUnit = match?.unit || nextUnit.trim();
+    const newBarcode = match?.barcode ?? lineBarcode(it);
+    const oldUnit = String(it.unit || "").trim() || "—";
+    if (
+      normalizeOrderCodeText(oldUnit) === normalizeOrderCodeText(newUnit) &&
+      normalizeOrderCodeText(newBarcode) ===
+        normalizeOrderCodeText(it.barcode || "")
+    ) {
+      return;
+    }
+
+    setUnitDraft((d) => ({
+      ...d,
+      [it.id]: { unit: newUnit, barcode: newBarcode },
+    }));
+
+    const sku = normalizeOrderCodeText(it.product_slug || "") || "—";
+    const auditNote = `Hệ thống: ${actorLabel} đã đổi ĐVT của mã ${sku} từ '${oldUnit}' sang '${newUnit}'`;
+
+    setUnitBusyId(it.id);
+    try {
+      await updateItemUnit.mutateAsync({
+        itemId: it.id,
+        unit: newUnit,
+        barcode: newBarcode || null,
+        auditNote,
+      });
+      toast({
+        title: "Đã đổi ĐVT",
+        description: `${sku}: ${oldUnit} → ${newUnit}`,
+      });
+    } catch (e) {
+      setUnitDraft((d) => {
+        const next = { ...d };
+        delete next[it.id];
+        return next;
+      });
+      toast({
+        title: "Không đổi được ĐVT",
+        description: e instanceof Error ? e.message : "Lỗi",
+        variant: "destructive",
+      });
+    } finally {
+      setUnitBusyId(null);
+    }
+  };
 
   const handleSavePack = async () => {
     try {
@@ -410,6 +507,8 @@ export default function WarehouseOrderDetail({
         lines: order.order_items.map((it) => ({
           itemId: it.id,
           qtyPacked: packed[it.id] ?? it.qty_requested ?? it.quantity,
+          unit: lineUnit(it) || it.unit || null,
+          barcode: lineBarcode(it) || it.barcode || null,
         })),
       });
       toast({ title: "Đã lưu soạn hàng", description: order.order_code || "" });
@@ -790,6 +889,35 @@ export default function WarehouseOrderDetail({
               </div>
             ) : null}
 
+            {newSlug && addUnitOptions.length === 0 ? (
+              <>
+                <div className="space-y-1 min-w-[160px] flex-1">
+                  <Label className="text-xs">Tên hàng *</Label>
+                  <Input
+                    data-add-name="1"
+                    className="h-10"
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="Tên hàng mới"
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter") return;
+                      e.preventDefault();
+                      void handleAdd();
+                    }}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Mã vạch</Label>
+                  <Input
+                    className="w-36 h-10 font-mono text-xs"
+                    value={newBarcode}
+                    onChange={(e) => setNewBarcode(e.target.value)}
+                    placeholder="Mã vạch"
+                  />
+                </div>
+              </>
+            ) : null}
+
             <div className="space-y-1">
               <Label className="text-xs">Số lượng</Label>
               <QtyInput
@@ -843,7 +971,7 @@ export default function WarehouseOrderDetail({
               <TableHead className={cn(excelTh, "text-left")}>Mã hàng</TableHead>
               <TableHead className={cn(excelTh, "text-left")}>Mã vạch</TableHead>
               <TableHead className={cn(excelTh, "text-left")}>Tên hàng</TableHead>
-              <TableHead className={cn(excelTh, "w-16")}>ĐVT</TableHead>
+              <TableHead className={cn(excelTh, "w-28")}>ĐVT</TableHead>
               <TableHead className={cn(excelTh, "text-right bg-emerald-100")}>
                 Tồn
               </TableHead>
@@ -866,10 +994,16 @@ export default function WarehouseOrderDetail({
               const req = it.qty_requested ?? it.quantity;
               const packedVal = packed[it.id] ?? it.qty_packed ?? null;
               const mismatch = qtyMismatchKind(req, packedVal);
+              const displayUnit = lineUnit(it);
+              const displayBarcode = lineBarcode(it);
+              const unitOpts = getSkuUnitOptions(
+                skuUnitIndex,
+                it.product_slug || "",
+              );
               const ton =
-                getQty(it.product_slug, it.unit) ??
-                getQty(it.barcode, it.unit) ??
-                getQty(it.product_name, it.unit);
+                getQty(it.product_slug, displayUnit) ??
+                getQty(displayBarcode, displayUnit) ??
+                getQty(it.product_name, displayUnit);
               return (
                 <TableRow
                   key={it.id}
@@ -925,7 +1059,7 @@ export default function WarehouseOrderDetail({
                     ) : null}
                   </TableCell>
                   <TableCell className={cn(excelTd, "font-mono text-xs")}>
-                    {it.barcode || "—"}
+                    {displayBarcode || "—"}
                   </TableCell>
                   <TableCell className={excelTd}>
                     <div
@@ -940,7 +1074,65 @@ export default function WarehouseOrderDetail({
                     </div>
                   </TableCell>
                   <TableCell className={cn(excelTd, "font-medium text-xs")}>
-                    {it.unit || "—"}
+                    {!unitEditable ? (
+                      <span>{displayUnit || "—"}</span>
+                    ) : unitOpts.length > 0 ? (
+                      <Select
+                        value={
+                          resolveUnitOption(unitOpts, displayUnit)?.unit ||
+                          unitOpts[0]?.unit ||
+                          displayUnit
+                        }
+                        onValueChange={(v) => void onLineUnitChange(it, v)}
+                        disabled={
+                          unitOpts.length === 1 || unitBusyId === it.id
+                        }
+                      >
+                        <SelectTrigger
+                          className={cn(
+                            "h-7 text-xs min-w-[5.5rem]",
+                            unitOpts.length === 1 && "opacity-80",
+                          )}
+                        >
+                          <SelectValue placeholder="ĐVT" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {unitOpts.map((u) => (
+                            <SelectItem key={u.unit} value={u.unit}>
+                              {u.unit}
+                              {u.barcode ? ` · ${u.barcode}` : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        className="h-7 text-xs p-1 min-w-[4.5rem]"
+                        value={displayUnit}
+                        disabled={unitBusyId === it.id}
+                        onChange={(e) =>
+                          setUnitDraft((d) => ({
+                            ...d,
+                            [it.id]: {
+                              unit: e.target.value,
+                              barcode: displayBarcode,
+                            },
+                          }))
+                        }
+                        onBlur={() => {
+                          const draft = unitDraft[it.id];
+                          if (
+                            !draft ||
+                            normalizeOrderCodeText(draft.unit) ===
+                              normalizeOrderCodeText(it.unit || "")
+                          ) {
+                            return;
+                          }
+                          void onLineUnitChange(it, draft.unit);
+                        }}
+                        placeholder="ĐVT"
+                      />
+                    )}
                   </TableCell>
                   <TableCell
                     className={cn(

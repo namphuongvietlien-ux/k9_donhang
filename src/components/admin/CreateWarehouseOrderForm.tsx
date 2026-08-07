@@ -42,7 +42,6 @@ import {
   expandProductUnitOptions,
   getSkuUnitOptions,
   isLoiMaSku,
-  LOI_MA_SKU,
   resolveAvailableVariants,
   resolveUnitOption,
   type CatalogProductRow,
@@ -87,6 +86,11 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
+import {
+  K9_DRAFT_ORDER_TRANSFER,
+  peekLocalDraft,
+  useLocalDraft,
+} from "@/hooks/useLocalDraft";
 
 interface CartLine {
   key: string;
@@ -100,7 +104,18 @@ interface CartLine {
   productId: string | null;
   price: number;
   stockQty: number | null;
+  /** SKU gõ tay / không có trong catalog — mở khóa tên/ĐVT/MV */
+  isCustomSku?: boolean;
 }
+
+type TransferFormDraft = {
+  v: 1;
+  loai: PhieuLoai;
+  sourceWh: string;
+  destWh: string;
+  lines: CartLine[];
+  savedAt?: string;
+};
 
 interface CatalogHit {
   id: string;
@@ -161,13 +176,60 @@ const CreateWarehouseOrderForm = forwardRef<
   const { toast } = useToast();
   const scanRef = useRef<HTMLInputElement>(null);
 
-  const [loai, setLoai] = useState<PhieuLoai>("DonHang");
-  const [sourceWh, setSourceWh] = useState("");
-  const [destWh, setDestWh] = useState("");
+  const initialDraftRef = useRef(
+    peekLocalDraft<TransferFormDraft>(K9_DRAFT_ORDER_TRANSFER),
+  );
+  const initialDraft = initialDraftRef.current;
+  const restoredToastShown = useRef(false);
+
+  const [loai, setLoai] = useState<PhieuLoai>(
+    () => initialDraft?.loai || "DonHang",
+  );
+  const [sourceWh, setSourceWh] = useState(
+    () => initialDraft?.sourceWh || "",
+  );
+  const [destWh, setDestWh] = useState(() => initialDraft?.destWh || "");
   const [scan, setScan] = useState("");
-  const [lines, setLines] = useState<CartLine[]>([]);
+  const [lines, setLines] = useState<CartLine[]>(
+    () =>
+      (Array.isArray(initialDraft?.lines) ? initialDraft!.lines : []).map(
+        (l) => ({
+          ...l,
+          unitOptions: Array.isArray(l.unitOptions) ? l.unitOptions : [],
+        }),
+      ),
+  );
   const [dupOpen, setDupOpen] = useState(false);
   const [dupInfo, setDupInfo] = useState<DuplicatePreSaveResult | null>(null);
+
+  const draftPayload = useMemo(
+    (): TransferFormDraft => ({
+      v: 1,
+      loai,
+      sourceWh,
+      destWh,
+      lines,
+      savedAt: new Date().toISOString(),
+    }),
+    [loai, sourceWh, destWh, lines],
+  );
+  const formDirty = lines.length > 0;
+  const { clearDraft } = useLocalDraft({
+    storageKey: K9_DRAFT_ORDER_TRANSFER,
+    value: draftPayload,
+    isDirty: formDirty,
+    debounceMs: 1000,
+  });
+
+  useEffect(() => {
+    if (restoredToastShown.current) return;
+    if (!initialDraft?.lines?.length) return;
+    restoredToastShown.current = true;
+    toast({
+      title: "Đã khôi phục bản nháp chưa lưu trước đó!",
+      description: `${initialDraft.lines.length} dòng · ${initialDraft.loai === "DieuChuyen" ? "Điều chuyển" : "Đơn hàng"}`,
+    });
+  }, [toast, initialDraft]);
 
   const stockWhId = sourceWh || q7?.id || null;
   const { getQty } = useStock(stockWhId);
@@ -366,26 +428,44 @@ const CreateWarehouseOrderForm = forwardRef<
     },
   }));
 
-  /** GAS: Enter không khớp → Lỗi Mã (không chặn lưu) */
-  const addLoiMa = (raw: string) => {
+  /** Enter không khớp catalog → dòng mã ngoài (user tự điền tên/ĐVT/MV) */
+  const addCustomSku = (raw: string) => {
     const val = raw.trim();
     if (!val) return;
-    setLines((prev) => [
-      {
-        key: `${Date.now()}-loi-${val}`,
-        maHang: LOI_MA_SKU,
-        maVach: val,
-        tenHang: "❌ Không tồn tại",
-        dvt: "Lỗi",
-        unitOptions: [],
-        quantity: 1,
-        productId: null,
-        price: 0,
-        stockQty: null,
-      },
-      ...prev,
-    ]);
+    const sku = normalizeOrderCodeText(val);
+    setLines((prev) => {
+      const exist = prev.find(
+        (l) =>
+          l.isCustomSku &&
+          normalizeOrderCodeText(l.maHang) === sku,
+      );
+      if (exist) {
+        return prev.map((l) =>
+          l.key === exist.key ? { ...l, quantity: l.quantity + 1 } : l,
+        );
+      }
+      return [
+        {
+          key: `${Date.now()}-new-${sku}`,
+          maHang: sku,
+          maVach: "",
+          tenHang: "",
+          dvt: "cái",
+          unitOptions: [],
+          quantity: 1,
+          productId: null,
+          price: 0,
+          stockQty: null,
+          isCustomSku: true,
+        },
+        ...prev,
+      ];
+    });
     setScan("");
+    toast({
+      title: "Mã ngoài — hàng mới",
+      description: `${sku}: điền Tên hàng / ĐVT / Mã vạch rồi lưu phiếu.`,
+    });
     scanRef.current?.focus();
   };
 
@@ -406,7 +486,7 @@ const CreateWarehouseOrderForm = forwardRef<
       addProduct(suggestions[0], raw);
       return;
     }
-    addLoiMa(raw);
+    addCustomSku(raw);
   };
 
   const setQty = (key: string, qty: number) => {
@@ -447,7 +527,26 @@ const CreateWarehouseOrderForm = forwardRef<
     );
   };
 
+  const setLineName = (key: string, tenHang: string) => {
+    setLines((prev) =>
+      prev.map((l) => (l.key === key ? { ...l, tenHang } : l)),
+    );
+  };
+
   const doSave = async (acknowledgeDuplicate: boolean) => {
+    const incomplete = lines.find(
+      (l) =>
+        l.quantity > 0 &&
+        (!normalizeOrderCodeText(l.maHang) || !String(l.tenHang || "").trim()),
+    );
+    if (incomplete) {
+      toast({
+        title: "Thiếu thông tin dòng hàng",
+        description: `Mã ${incomplete.maHang || "—"} cần Tên hàng trước khi lưu.`,
+        variant: "destructive",
+      });
+      return;
+    }
     try {
       const res = await createOrder.mutateAsync({
         loaiPhieu: loai,
@@ -455,18 +554,21 @@ const CreateWarehouseOrderForm = forwardRef<
         destWarehouseId: destWh,
         acknowledgeDuplicate,
         lines: lines.map((l) => ({
-          productName: l.tenHang,
+          productName: l.tenHang.trim(),
           productSlug: l.maHang,
           quantity: l.quantity,
           price: l.price,
           barcode: l.maVach || null,
           unit: l.dvt || null,
+          productId: l.productId,
         })),
       });
       toast({ title: "Đã tạo phiếu", description: res.order_code });
+      clearDraft();
       setLines([]);
       setDupOpen(false);
       setDupInfo(null);
+      void refetchCatalog();
       onCreated?.(res.id);
       scanRef.current?.focus();
     } catch (e) {
@@ -801,8 +903,9 @@ const CreateWarehouseOrderForm = forwardRef<
               ) : (
                 lines.map((l, idx) => {
                   const loi = isLoiMaSku(l.maHang);
-                  const hasUnits = l.unitOptions.length > 0;
-                  const unitLocked = l.unitOptions.length === 1;
+                  const isCustom = !!l.isCustomSku || (!l.productId && !l.unitOptions.length);
+                  const hasUnits = l.unitOptions.length > 0 && !isCustom;
+                  const unitLocked = l.unitOptions.length === 1 && !isCustom;
                   const tonLive =
                     getQty(l.maHang, l.dvt) ??
                     getQty(l.maVach, l.dvt) ??
@@ -812,8 +915,8 @@ const CreateWarehouseOrderForm = forwardRef<
                       key={l.key}
                       className={cn(
                         excelTr,
-                        loi && "bg-red-50/80",
-                        !loi && idx % 2 === 1 && "bg-slate-50/70",
+                        (loi || isCustom) && "bg-emerald-50/70",
+                        !loi && !isCustom && idx % 2 === 1 && "bg-slate-50/70",
                       )}
                     >
                       <TableCell
@@ -829,9 +932,16 @@ const CreateWarehouseOrderForm = forwardRef<
                           className={cn(
                             "font-mono text-[13px] font-bold leading-tight uppercase",
                             loi && "text-red-700",
+                            isCustom && "text-emerald-800",
                           )}
+                          title={isCustom ? "Hàng mới — sẽ upsert vào danh mục khi lưu" : undefined}
                         >
                           {normalizeOrderCodeText(l.maHang) || l.maHang}
+                          {isCustom ? (
+                            <span className="ml-1 text-[10px] font-semibold text-emerald-700">
+                              MỚI
+                            </span>
+                          ) : null}
                         </div>
                       </TableCell>
                       <TableCell className={excelTd}>
@@ -841,13 +951,13 @@ const CreateWarehouseOrderForm = forwardRef<
                             hasUnits && !loi && "bg-muted",
                           )}
                           value={l.maVach}
-                          readOnly={hasUnits && !loi}
+                          readOnly={hasUnits && !loi && !isCustom}
                           onChange={(e) =>
                             setLineBarcode(l.key, e.target.value)
                           }
                           placeholder="Mã vạch"
                           title={
-                            hasUnits && !loi
+                            hasUnits && !loi && !isCustom
                               ? "Đổi ĐVT để đổi mã vạch theo catalog"
                               : undefined
                           }
@@ -860,10 +970,21 @@ const CreateWarehouseOrderForm = forwardRef<
                           loi && "text-red-700",
                         )}
                       >
-                        {l.tenHang}
+                        {isCustom || loi ? (
+                          <Input
+                            className="h-7 text-sm p-1"
+                            value={l.tenHang}
+                            onChange={(e) =>
+                              setLineName(l.key, e.target.value)
+                            }
+                            placeholder="Tên hàng *"
+                          />
+                        ) : (
+                          l.tenHang
+                        )}
                       </TableCell>
                       <TableCell className={excelTd}>
-                        {!hasUnits || loi ? (
+                        {!hasUnits || loi || isCustom ? (
                           <Input
                             className="h-7 text-sm p-1"
                             value={l.dvt}

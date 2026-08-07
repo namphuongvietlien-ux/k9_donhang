@@ -86,6 +86,11 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
+import {
+  K9_DRAFT_ORDER_SALES,
+  peekLocalDraft,
+  useLocalDraft,
+} from "@/hooks/useLocalDraft";
 
 interface CartLine {
   key: string;
@@ -99,6 +104,15 @@ interface CartLine {
   serviceFee: number;
   lineKind: SalesLineKind;
 }
+
+type SalesFormDraft = {
+  v: 1;
+  branchId: string;
+  invoiceDraft: string;
+  invoiceLocked: string | null;
+  lines: CartLine[];
+  savedAt?: string;
+};
 
 interface CatalogHit {
   id: string;
@@ -187,12 +201,70 @@ export default function BanKemDvPanel() {
   }, [deepVoucher]);
 
   /* —— Create form —— */
-  const [branchId, setBranchId] = useState("");
-  const [invoiceDraft, setInvoiceDraft] = useState("");
-  const [invoiceLocked, setInvoiceLocked] = useState<string | null>(null);
+  const initialDraftRef = useRef(
+    peekLocalDraft<SalesFormDraft>(K9_DRAFT_ORDER_SALES),
+  );
+  const initialDraft = initialDraftRef.current;
+  const restoredToastShown = useRef(false);
+
+  const [branchId, setBranchId] = useState(
+    () => initialDraft?.branchId || "",
+  );
+  const [invoiceDraft, setInvoiceDraft] = useState(
+    () => initialDraft?.invoiceDraft || "",
+  );
+  const [invoiceLocked, setInvoiceLocked] = useState<string | null>(
+    () => initialDraft?.invoiceLocked ?? null,
+  );
   const [invoiceError, setInvoiceError] = useState(false);
   const [scan, setScan] = useState("");
-  const [lines, setLines] = useState<CartLine[]>([]);
+  const [lines, setLines] = useState<CartLine[]>(
+    () =>
+      (Array.isArray(initialDraft?.lines) ? initialDraft!.lines : []).map(
+        (l) => ({
+          ...l,
+          unitOptions: Array.isArray(l.unitOptions) ? l.unitOptions : [],
+        }),
+      ),
+  );
+
+  const draftPayload = useMemo(
+    (): SalesFormDraft => ({
+      v: 1,
+      branchId,
+      invoiceDraft,
+      invoiceLocked,
+      lines,
+      savedAt: new Date().toISOString(),
+    }),
+    [branchId, invoiceDraft, invoiceLocked, lines],
+  );
+  const formDirty =
+    lines.length > 0 || !!invoiceLocked || !!invoiceDraft.trim();
+  const { clearDraft } = useLocalDraft({
+    storageKey: K9_DRAFT_ORDER_SALES,
+    value: draftPayload,
+    isDirty: formDirty,
+    debounceMs: 1000,
+  });
+
+  useEffect(() => {
+    if (restoredToastShown.current) return;
+    if (
+      !initialDraft?.lines?.length &&
+      !initialDraft?.invoiceLocked &&
+      !initialDraft?.invoiceDraft
+    ) {
+      return;
+    }
+    restoredToastShown.current = true;
+    toast({
+      title: "Đã khôi phục bản nháp chưa lưu trước đó!",
+      description: initialDraft.lines?.length
+        ? `${initialDraft.lines.length} dòng xuất bán`
+        : "Hóa đơn / chi nhánh đã nhập",
+    });
+  }, [toast, initialDraft]);
 
   useEffect(() => {
     if (isStoreScoped && scopedWhId) {
@@ -499,6 +571,7 @@ export default function BanKemDvPanel() {
         title: "Đã lưu xuất bán",
         description: `${res.voucher_code} · HĐ ${res.invoice_no}`,
       });
+      clearDraft();
       setLines([]);
       setInvoiceLocked(null);
       setInvoiceDraft("");
