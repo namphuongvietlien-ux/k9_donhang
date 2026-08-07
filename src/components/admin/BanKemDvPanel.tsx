@@ -31,6 +31,7 @@ import {
 import {
   buildSkuUnitIndex,
   expandProductUnitOptions,
+  getSkuUnitOptions,
   resolveUnitOption,
   resolveAvailableVariants,
   type CatalogProductRow,
@@ -485,12 +486,17 @@ export default function BanKemDvPanel() {
     setLines((prev) =>
       prev.map((l) => {
         if (l.key !== key) return l;
-        const match = resolveUnitOption(l.unitOptions, dvt);
-        if (!match) return { ...l, dvt };
+        const liveOpts = getSkuUnitOptions(skuUnitIndex, l.maHang);
+        const opts = liveOpts.length > 0 ? liveOpts : l.unitOptions;
+        const match = resolveUnitOption(opts, dvt);
+        if (!match) {
+          return { ...l, dvt, maVach: "", unitOptions: opts };
+        }
         return {
           ...l,
           dvt: match.unit,
-          maVach: match.barcode,
+          maVach: String(match.barcode ?? "").trim(),
+          unitOptions: opts,
           unitPrice:
             l.lineKind === "HANG" ? match.price || l.unitPrice : l.unitPrice,
           serviceFee:
@@ -1292,53 +1298,79 @@ export default function BanKemDvPanel() {
                         {normalizeOrderCodeText(l.maHang) || l.maHang}
                       </TableCell>
                       <TableCell className={cn(excelTd, "font-mono text-xs")}>
-                        <Input
-                          className={cn(
-                            "h-7 text-xs font-mono p-1",
-                            l.unitOptions.length > 0 && "bg-muted",
-                          )}
-                          value={l.maVach}
-                          readOnly={l.unitOptions.length > 0}
-                          onChange={(e) =>
-                            patchLine(l.key, { maVach: e.target.value })
-                          }
-                          placeholder="Mã vạch"
-                        />
+                        {(() => {
+                          const liveOpts = getSkuUnitOptions(
+                            skuUnitIndex,
+                            l.maHang,
+                          );
+                          const unitOpts =
+                            liveOpts.length > 0 ? liveOpts : l.unitOptions;
+                          return (
+                            <Input
+                              className={cn(
+                                "h-7 text-xs font-mono p-1",
+                                unitOpts.length > 0 && "bg-muted",
+                              )}
+                              value={l.maVach}
+                              readOnly={unitOpts.length > 0}
+                              onChange={(e) =>
+                                patchLine(l.key, { maVach: e.target.value })
+                              }
+                              placeholder="Mã vạch"
+                            />
+                          );
+                        })()}
                       </TableCell>
                       <TableCell className={cn(excelTd, "text-xs text-left")}>
                         {l.tenHang}
                       </TableCell>
                       <TableCell className={excelTd}>
-                        {l.unitOptions.length > 0 ? (
-                          <Select
-                            value={
-                              resolveUnitOption(l.unitOptions, l.dvt)?.unit ||
-                              l.unitOptions[0]?.unit ||
-                              l.dvt
-                            }
-                            onValueChange={(v) => setLineUnit(l.key, v)}
-                            disabled={l.unitOptions.length === 1}
-                          >
-                            <SelectTrigger className="h-7 text-xs">
-                              <SelectValue placeholder="ĐVT" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {l.unitOptions.map((u) => (
-                                <SelectItem key={u.unit} value={u.unit}>
-                                  {u.unit}
-                                  {u.barcode ? ` · ${u.barcode}` : ""}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <Input
-                            className="h-7 text-xs p-1"
-                            value={l.dvt}
-                            onChange={(e) => setLineUnit(l.key, e.target.value)}
-                            placeholder="ĐVT"
-                          />
-                        )}
+                        {(() => {
+                          const liveOpts = getSkuUnitOptions(
+                            skuUnitIndex,
+                            l.maHang,
+                          );
+                          const unitOpts =
+                            liveOpts.length > 0 ? liveOpts : l.unitOptions;
+                          if (unitOpts.length > 0) {
+                            return (
+                              <Select
+                                value={
+                                  resolveUnitOption(unitOpts, l.dvt)?.unit ||
+                                  unitOpts[0]?.unit ||
+                                  l.dvt
+                                }
+                                onValueChange={(v) => setLineUnit(l.key, v)}
+                                disabled={unitOpts.length === 1}
+                              >
+                                <SelectTrigger className="h-7 text-xs">
+                                  <SelectValue placeholder="ĐVT" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {unitOpts.map((u) => (
+                                    <SelectItem
+                                      key={`${u.unit}-${u.barcode}`}
+                                      value={u.unit}
+                                    >
+                                      {u.unit}
+                                      {u.barcode ? ` · ${u.barcode}` : ""}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            );
+                          }
+                          return (
+                            <Input
+                              className="h-7 text-xs p-1"
+                              value={l.dvt}
+                              onChange={(e) =>
+                                setLineUnit(l.key, e.target.value)
+                              }
+                              placeholder="ĐVT"
+                            />
+                          );
+                        })()}
                       </TableCell>
                       <TableCell
                         className={cn(

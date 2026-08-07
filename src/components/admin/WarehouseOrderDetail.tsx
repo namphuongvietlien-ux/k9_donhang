@@ -42,6 +42,7 @@ import {
   getSkuUnitOptions,
   resolveUnitOption,
   resolveAvailableVariants,
+  barcodeForUnit,
   type CatalogProductRow,
 } from "@/lib/catalogUnitBarcode";
 import { filterCatalogSuggestions } from "@/lib/catalogSearch";
@@ -216,7 +217,23 @@ export default function WarehouseOrderDetail({
     }
     setPacked(initPack);
     setReqDraft(initReq);
-    setUnitDraft({});
+    // Chỉ xóa draft ĐVT khi server đã khớp — tránh mất barcode vừa sync trước refetch
+    setUnitDraft((d) => {
+      if (!Object.keys(d).length) return d;
+      const next = { ...d };
+      for (const it of order.order_items) {
+        const draft = next[it.id];
+        if (!draft) continue;
+        const unitOk =
+          normalizeOrderCodeText(draft.unit) ===
+          normalizeOrderCodeText(it.unit || "");
+        const bcOk =
+          normalizeOrderCodeText(draft.barcode) ===
+          normalizeOrderCodeText(it.barcode || "");
+        if (unitOk && bcOk) delete next[it.id];
+      }
+      return next;
+    });
   }, [order]);
 
   const clearAddForm = () => {
@@ -454,7 +471,10 @@ export default function WarehouseOrderDetail({
     const opts = getSkuUnitOptions(skuUnitIndex, it.product_slug || "");
     const match = resolveUnitOption(opts, nextUnit);
     const newUnit = match?.unit || nextUnit.trim();
-    const newBarcode = match?.barcode ?? lineBarcode(it);
+    // BẮT BUỘC sync barcode theo ĐVT (kể cả rỗng — xóa MV cũ)
+    const newBarcode = match
+      ? String(match.barcode ?? "").trim()
+      : barcodeForUnit(opts, newUnit);
     const oldUnit = String(it.unit || "").trim() || "—";
     if (
       normalizeOrderCodeText(oldUnit) === normalizeOrderCodeText(newUnit) &&
@@ -482,7 +502,7 @@ export default function WarehouseOrderDetail({
       });
       toast({
         title: "Đã đổi ĐVT",
-        description: `${sku}: ${oldUnit} → ${newUnit}`,
+        description: `${sku}: ${oldUnit} → ${newUnit}${newBarcode ? ` · MV ${newBarcode}` : ""}`,
       });
     } catch (e) {
       setUnitDraft((d) => {

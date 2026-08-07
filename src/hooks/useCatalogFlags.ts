@@ -293,9 +293,11 @@ export function useSaveCatalogFlags() {
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["catalog-flag-admin"] }),
         qc.invalidateQueries({ queryKey: ["new-products-strip"] }),
-        qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] }),
         qc.invalidateQueries({ queryKey: ["packing-summary-meta"] }),
       ]);
+      window.setTimeout(() => {
+        void qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] });
+      }, 0);
     },
   });
 }
@@ -394,13 +396,13 @@ export function useUpdateVariantProduct() {
         .eq("id", input.id);
       if (error) throw error;
     },
-    onSuccess: async () => {
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: ["variant-groups"] }),
-        qc.invalidateQueries({ queryKey: ["catalog-flag-admin"] }),
-        qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] }),
-        qc.invalidateQueries({ queryKey: ["new-products-strip"] }),
-      ]);
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["variant-groups"] });
+      void qc.invalidateQueries({ queryKey: ["catalog-flag-admin"] });
+      void qc.invalidateQueries({ queryKey: ["new-products-strip"] });
+      window.setTimeout(() => {
+        void qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] });
+      }, 0);
     },
   });
 }
@@ -523,13 +525,13 @@ export function useSaveChildVariants() {
 
       return { updated, created, parentSku };
     },
-    onSuccess: async () => {
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: ["variant-groups"] }),
-        qc.invalidateQueries({ queryKey: ["catalog-flag-admin"] }),
-        qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] }),
-        qc.invalidateQueries({ queryKey: ["new-products-strip"] }),
-      ]);
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["variant-groups"] });
+      void qc.invalidateQueries({ queryKey: ["catalog-flag-admin"] });
+      void qc.invalidateQueries({ queryKey: ["new-products-strip"] });
+      window.setTimeout(() => {
+        void qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] });
+      }, 0);
     },
   });
 }
@@ -603,13 +605,15 @@ export function useCreateCatalogSku() {
       if (error) throw new Error(error.message);
       return { id: (data as { id: string }).id, created: true, maHang };
     },
-    onSuccess: async () => {
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: ["variant-groups"] }),
-        qc.invalidateQueries({ queryKey: ["catalog-flag-admin"] }),
-        qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] }),
-        qc.invalidateQueries({ queryKey: ["new-products-strip"] }),
-      ]);
+    onSuccess: () => {
+      // Không await refetch nặng (variant-groups quét cả catalog) — tránh treo UI
+      void qc.invalidateQueries({ queryKey: ["new-products-strip"] });
+      void qc.invalidateQueries({ queryKey: ["variant-groups"] });
+      void qc.invalidateQueries({ queryKey: ["catalog-flag-admin"] });
+      // Catalog lớn — để nền, không chặn toast/đóng dialog
+      window.setTimeout(() => {
+        void qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] });
+      }, 0);
     },
   });
 }

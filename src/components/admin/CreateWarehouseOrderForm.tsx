@@ -504,18 +504,24 @@ const CreateWarehouseOrderForm = forwardRef<
     setLines((prev) =>
       prev.map((l) => {
         if (l.key !== key) return l;
-        if (!l.unitOptions.length) {
+        const liveOpts = getSkuUnitOptions(skuUnitIndex, l.maHang);
+        const opts = liveOpts.length > 0 ? liveOpts : l.unitOptions;
+        if (!opts.length) {
           return { ...l, dvt };
         }
-        const match = resolveUnitOption(l.unitOptions, dvt);
-        if (!match) return { ...l, dvt };
+        const match = resolveUnitOption(opts, dvt);
+        if (!match) {
+          return { ...l, dvt, maVach: "", unitOptions: opts };
+        }
         return {
           ...l,
           dvt: match.unit,
-          maVach: match.barcode,
+          // Bắt buộc đổi MV theo ĐVT (kể cả rỗng)
+          maVach: String(match.barcode ?? "").trim(),
           productId: match.productId,
           price: match.price || l.price,
           stockQty: getQty(l.maHang, match.unit) ?? l.stockQty,
+          unitOptions: opts,
         };
       }),
     );
@@ -903,9 +909,13 @@ const CreateWarehouseOrderForm = forwardRef<
               ) : (
                 lines.map((l, idx) => {
                   const loi = isLoiMaSku(l.maHang);
-                  const isCustom = !!l.isCustomSku || (!l.productId && !l.unitOptions.length);
-                  const hasUnits = l.unitOptions.length > 0 && !isCustom;
-                  const unitLocked = l.unitOptions.length === 1 && !isCustom;
+                  const liveOpts = getSkuUnitOptions(skuUnitIndex, l.maHang);
+                  const unitOpts =
+                    liveOpts.length > 0 ? liveOpts : l.unitOptions;
+                  const isCustom =
+                    !!l.isCustomSku || (!l.productId && !unitOpts.length);
+                  const hasUnits = unitOpts.length > 0 && !isCustom;
+                  const unitLocked = unitOpts.length === 1 && !isCustom;
                   const tonLive =
                     getQty(l.maHang, l.dvt) ??
                     getQty(l.maVach, l.dvt) ??
@@ -996,8 +1006,8 @@ const CreateWarehouseOrderForm = forwardRef<
                         ) : (
                           <Select
                             value={
-                              resolveUnitOption(l.unitOptions, l.dvt)?.unit ||
-                              l.unitOptions[0]?.unit ||
+                              resolveUnitOption(unitOpts, l.dvt)?.unit ||
+                              unitOpts[0]?.unit ||
                               l.dvt
                             }
                             onValueChange={(v) => setLineUnit(l.key, v)}
@@ -1012,8 +1022,8 @@ const CreateWarehouseOrderForm = forwardRef<
                               <SelectValue placeholder="Chọn ĐVT" />
                             </SelectTrigger>
                             <SelectContent>
-                              {l.unitOptions.map((u) => (
-                                <SelectItem key={u.unit} value={u.unit}>
+                              {unitOpts.map((u) => (
+                                <SelectItem key={`${u.unit}-${u.barcode}`} value={u.unit}>
                                   {u.unit}
                                   {u.barcode ? ` · ${u.barcode}` : ""}
                                 </SelectItem>
