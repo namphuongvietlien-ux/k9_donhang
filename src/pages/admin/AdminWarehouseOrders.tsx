@@ -10,7 +10,8 @@ import PackingWeekCalendar from "@/components/admin/PackingWeekCalendar";
 import PackingSummaryBoard from "@/components/admin/PackingSummaryBoard";
 import BanKemDvPanel from "@/components/admin/BanKemDvPanel";
 import SEO from "@/components/SEO";
-import { useWarehouses } from "@/hooks/useWarehouses";
+import { useWarehouses, warehouseLabel } from "@/hooks/useWarehouses";
+import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import { useWarehouseOrders } from "@/hooks/useWarehouseOrders";
 import {
   ORDER_KIND_LABELS,
@@ -160,7 +161,7 @@ const AdminWarehouseOrders = () => {
     for (const o of filtered) {
       let key: string;
       if (groupBy === "warehouse") {
-        key = o.warehouse?.code || o.warehouse_id || "—";
+        key = warehouseShortLabel(o.warehouse) || o.warehouse_id || "—";
       } else {
         key = format(new Date(o.created_at), "yyyy-MM-dd");
       }
@@ -284,7 +285,7 @@ const AdminWarehouseOrders = () => {
                   <SelectItem value="ALL">Tất cả kho nhận</SelectItem>
                   {warehouses.map((w) => (
                     <SelectItem key={w.id} value={w.id}>
-                      {w.code}
+                      {warehouseLabel(w)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -389,8 +390,8 @@ const AdminWarehouseOrders = () => {
                                 <TableCell
                                   className={cn(excelTd, "text-xs whitespace-nowrap")}
                                 >
-                                  {o.source_warehouse?.code || "—"} →{" "}
-                                  {o.warehouse?.code || "—"}
+                                  {warehouseShortLabel(o.source_warehouse)} →{" "}
+                                  {warehouseShortLabel(o.warehouse)}
                                 </TableCell>
                                 <TableCell className={excelTd}>
                                   <Badge

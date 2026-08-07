@@ -12,7 +12,7 @@ import {
   Warehouse,
 } from "lucide-react";
 import { downloadImportTemplate } from "@/lib/importTemplates";
-import { useWarehouses } from "@/hooks/useWarehouses";
+import { useWarehouses, warehouseLabel } from "@/hooks/useWarehouses";
 import {
   useCatalogForImport,
   useCommitCatalogStockImport,
@@ -166,7 +166,8 @@ export default function CatalogStockImport({
   };
 
   const loadingBase = whLoading || catalogLoading;
-  const whLabel = warehouses.find((w) => w.id === warehouseId)?.code || "—";
+  const selectedWh = warehouses.find((w) => w.id === warehouseId);
+  const whLabel = selectedWh ? warehouseLabel(selectedWh) : "—";
 
   const previewLines = useMemo(() => parsed?.lines.slice(0, 80) ?? [], [parsed]);
 
@@ -231,7 +232,7 @@ export default function CatalogStockImport({
                 <SelectContent>
                   {warehouses.map((w) => (
                     <SelectItem key={w.id} value={w.id}>
-                      {w.code} — {w.name}
+                      {warehouseLabel(w)} — {w.name}
                     </SelectItem>
                   ))}
                 </SelectContent>

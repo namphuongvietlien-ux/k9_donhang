@@ -11,7 +11,8 @@ import {
   getMeta,
   resolveLineUnitBarcode,
 } from "@/lib/productCatalogMeta";
-import { enrichWarehouseMeta } from "@/lib/warehouseMeta";
+import { enrichWarehouseMeta, warehouseShortLabel } from "@/lib/warehouseMeta";
+import { warehouseLabel } from "@/hooks/useWarehouses";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -274,7 +275,7 @@ export default function PrintDayModal({
               <SelectItem value="all">Tất cả kho</SelectItem>
               {warehouses.map((w) => (
                 <SelectItem key={w.id} value={w.id}>
-                  {w.code} — {w.name}
+                  {warehouseLabel(w)} — {w.name}
                 </SelectItem>
               ))}
             </SelectContent>

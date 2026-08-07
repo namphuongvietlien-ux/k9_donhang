@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { useWarehouses, warehouseLabel } from "@/hooks/useWarehouses";
+import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import { useStoreScope } from "@/hooks/useStoreScope";
 import { useCatalogForImport } from "@/hooks/useCatalogStockImport";
 import {
@@ -535,7 +536,8 @@ export default function BanKemDvPanel() {
     }
   };
 
-  const branchCode = warehouses.find((w) => w.id === branchId)?.code || "—";
+  const branchWh = warehouses.find((w) => w.id === branchId);
+  const branchCode = branchWh ? warehouseLabel(branchWh) : "—";
   const locked = !!invoiceLocked;
   const packingBanner = useMemo(() => getPackingSaveBanner(new Date()), []);
 
@@ -803,7 +805,9 @@ export default function BanKemDvPanel() {
                           );
                           return wh
                             ? warehouseLabel(wh)
-                            : v.warehouse_code || "—";
+                            : warehouseShortLabel({
+                                code: v.warehouse_code,
+                              });
                         })()}
                       </TableCell>
                       <TableCell

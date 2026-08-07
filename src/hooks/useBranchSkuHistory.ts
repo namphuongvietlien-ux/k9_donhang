@@ -6,6 +6,7 @@ import {
   toDateKey,
   toHoChiMinhMillis,
 } from "@/lib/packingWindows";
+import { warehouseShortLabel } from "@/lib/warehouseMeta";
 
 export interface BranchSkuHistoryEntry {
   maHang: string;
@@ -93,7 +94,7 @@ export function useBranchSkuHistory(options: {
               createdAtMs: cms,
               createdUi: formatOrderTimestampUi(cms),
               dateLabel: toDateKey(new Date(cms)).split("-").reverse().join("/"),
-              storeLabel: order.warehouse?.code || order.warehouse?.name || "",
+              storeLabel: warehouseShortLabel(order.warehouse),
             };
           }
         }

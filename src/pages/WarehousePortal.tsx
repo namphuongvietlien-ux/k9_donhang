@@ -11,6 +11,7 @@ import {
   PenLine,
   Settings,
 } from "lucide-react";
+import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import { useAuth } from "@/contexts/AuthContext";
 import { useStoreScope } from "@/hooks/useStoreScope";
 import CreateWarehouseOrderForm, {
@@ -272,11 +273,8 @@ function ManageOrdersPanel() {
                   </TableCell>
                   <TableCell>{o.order_kind}</TableCell>
                   <TableCell className="text-sm whitespace-nowrap">
-                    {o.source_warehouse?.short_name ||
-                      o.source_warehouse?.code ||
-                      "—"}{" "}
-                    →{" "}
-                    {o.warehouse?.short_name || o.warehouse?.code || "—"}
+                    {warehouseShortLabel(o.source_warehouse)} →{" "}
+                    {warehouseShortLabel(o.warehouse)}
                   </TableCell>
                   <TableCell>
                     <Badge

@@ -11,7 +11,7 @@ import {
   FolderOpen,
 } from "lucide-react";
 import { downloadImportTemplate } from "@/lib/importTemplates";
-import { useWarehouses } from "@/hooks/useWarehouses";
+import { useWarehouses, warehouseLabel } from "@/hooks/useWarehouses";
 import { useImportCatalogAndStock } from "@/hooks/useOrderImport";
 import type { DuplicatePreSaveResult } from "@/hooks/useOrderImport";
 import { useCommitTransferImport } from "@/hooks/useTransferImport";
@@ -298,7 +298,7 @@ export default function TransferExcelImport({
             <SelectContent>
               {warehouses.map((w) => (
                 <SelectItem key={w.id} value={w.id}>
-                  {w.code} — {w.name}
+                  {warehouseLabel(w)} — {w.name}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -317,7 +317,7 @@ export default function TransferExcelImport({
             <SelectContent>
               {warehouses.map((w) => (
                 <SelectItem key={w.id} value={w.id}>
-                  {w.code} — {w.name}
+                  {warehouseLabel(w)} — {w.name}
                 </SelectItem>
               ))}
             </SelectContent>

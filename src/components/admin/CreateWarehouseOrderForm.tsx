@@ -466,8 +466,10 @@ const CreateWarehouseOrderForm = forwardRef<
     await doSave(false);
   };
 
-  const srcCode = warehouses.find((w) => w.id === sourceWh)?.code || "—";
-  const destCode = warehouses.find((w) => w.id === destWh)?.code || "—";
+  const srcWh = warehouses.find((w) => w.id === sourceWh);
+  const destWhRow = warehouses.find((w) => w.id === destWh);
+  const srcCode = srcWh ? formatWhLabel(srcWh) : "—";
+  const destCode = destWhRow ? formatWhLabel(destWhRow) : "—";
   /** Đơn hàng: khóa xuất Q7; Điều chuyển + CN: khóa xuất = kho được cấp */
   const sourceLocked =
     loai === "DonHang" || (loai === "DieuChuyen" && isStoreScoped);

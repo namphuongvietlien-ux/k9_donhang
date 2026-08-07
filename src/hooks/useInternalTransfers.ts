@@ -5,6 +5,7 @@ import {
   mapOrderStatusToTransfer,
   type TransferStatus,
 } from "@/lib/internalTransfers";
+import { warehouseShortLabel } from "@/lib/warehouseMeta";
 
 export interface InternalTransferRow {
   id: string;
@@ -63,9 +64,8 @@ function toRow(o: OrderTransferRaw): InternalTransferRow {
   return {
     id: o.id,
     code: o.order_code || o.id.slice(0, 8).toUpperCase(),
-    fromWarehouse:
-      o.source_warehouse?.code || o.source_warehouse?.name || "—",
-    toWarehouse: o.warehouse?.code || o.warehouse?.name || "—",
+    fromWarehouse: warehouseShortLabel(o.source_warehouse),
+    toWarehouse: warehouseShortLabel(o.warehouse),
     fromWarehouseId: o.source_warehouse_id,
     toWarehouseId: o.warehouse_id,
     status,

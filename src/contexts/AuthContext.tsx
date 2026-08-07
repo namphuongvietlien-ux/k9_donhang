@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
+import { warehouseShortLabel } from "@/lib/warehouseMeta";
 
 export type AdminRole = 'super_admin' | 'manager' | 'staff' | null;
 
@@ -112,7 +113,11 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
             setWarehouseId(row.warehouse_id || null);
             setWarehouseCode(row.warehouse_code || null);
             setWarehouseLabel(
-              row.warehouse_label ||
+              warehouseShortLabel({
+                code: row.warehouse_code,
+                short_name: row.warehouse_label,
+              }) ||
+                row.warehouse_label ||
                 (row.warehouse_id ? "Chi nhánh" : "Tất cả"),
             );
             return;
@@ -159,9 +164,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         const wh = Array.isArray(whRaw) ? whRaw[0] : whRaw;
         if (wid && wh) {
           setWarehouseCode(wh.code || null);
-          setWarehouseLabel(
-            wh.short_name || wh.name || wh.code || "Chi nhánh",
-          );
+          setWarehouseLabel(warehouseShortLabel(wh));
         } else {
           setWarehouseCode(null);
           setWarehouseLabel(wid ? "Chi nhánh" : "Tất cả");
@@ -197,9 +200,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
               short_name?: string;
             };
             setWarehouseCode(w.code || null);
-            setWarehouseLabel(
-              w.short_name || w.name || w.code || "Chi nhánh",
-            );
+            setWarehouseLabel(warehouseShortLabel(w));
           }
         }
         return;
@@ -228,9 +229,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
               short_name?: string;
             };
             setWarehouseCode(w.code || null);
-            setWarehouseLabel(
-              w.short_name || w.name || w.code || "Chi nhánh",
-            );
+            setWarehouseLabel(warehouseShortLabel(w));
           }
         }
         return;

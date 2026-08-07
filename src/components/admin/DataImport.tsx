@@ -3,7 +3,8 @@ import * as XLSX from "xlsx";
 import Papa from "papaparse";
 import { AlertTriangle, Download, FileSpreadsheet, Loader2, Upload } from "lucide-react";
 import { downloadImportTemplate } from "@/lib/importTemplates";
-import { useWarehouses } from "@/hooks/useWarehouses";
+import { useWarehouses, warehouseLabel } from "@/hooks/useWarehouses";
+import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import {
   checkDuplicateBeforeSave,
   useCommitOrderImport,
@@ -278,7 +279,7 @@ export default function DataImport({ onSuccess, className }: DataImportProps) {
             <SelectContent>
               {warehouses.map((w) => (
                 <SelectItem key={w.id} value={w.id}>
-                  {w.code} — {w.name}
+                  {warehouseLabel(w)} — {w.name}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -293,7 +294,7 @@ export default function DataImport({ onSuccess, className }: DataImportProps) {
             <SelectContent>
               {warehouses.map((w) => (
                 <SelectItem key={w.id} value={w.id}>
-                  {w.code} — {w.name}
+                  {warehouseLabel(w)} — {w.name}
                 </SelectItem>
               ))}
             </SelectContent>

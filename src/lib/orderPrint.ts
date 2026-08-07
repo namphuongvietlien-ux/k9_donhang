@@ -5,6 +5,7 @@
 
 import * as XLSX from "xlsx";
 import { format } from "date-fns";
+import { warehouseShortLabel } from "@/lib/warehouseMeta";
 
 export interface PrintOrderLine {
   maHang: string;
@@ -332,8 +333,8 @@ export function warehouseOrderToPrintDetail(order: {
     code: string;
     short_name?: string | null;
     print_name?: string | null;
-  } | null | undefined) =>
-    String(w?.short_name || w?.print_name || w?.code || "—").trim() || "—";
+    name?: string | null;
+  } | null | undefined) => warehouseShortLabel(w);
 
   return {
     soPhieu: order.order_code || "—",

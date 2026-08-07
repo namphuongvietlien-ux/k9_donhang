@@ -6,6 +6,7 @@ import {
   normalizeInvoiceNo,
 } from "@/lib/salesVoucher";
 import { notifyWarehouseEvent } from "@/lib/telegramNotify";
+import { warehouseShortLabel } from "@/lib/warehouseMeta";
 
 export type SalesLineKind = "HANG" | "DV";
 
@@ -334,7 +335,7 @@ export function useSalesVoucherMutations() {
       void notifyWarehouseEvent({
         event: "xb_created",
         soPhieu: voucherCode,
-        khoNhan: input.warehouseCode,
+        khoNhan: warehouseShortLabel({ code: input.warehouseCode }),
         extra: `HĐ ${invoiceNo} · ${rows.length} dòng · ${totalAmount.toLocaleString("vi-VN")}₫`,
       });
 
@@ -375,7 +376,7 @@ export function useSalesVoucherMutations() {
       void notifyWarehouseEvent({
         event: "xb_cancelled",
         soPhieu: v.voucher_code,
-        khoNhan: v.warehouse_code || "—",
+        khoNhan: warehouseShortLabel({ code: v.warehouse_code }),
       });
     },
     onSuccess: invalidate,
@@ -410,7 +411,7 @@ export function useSalesVoucherMutations() {
       void notifyWarehouseEvent({
         event: "xb_restored",
         soPhieu: v.voucher_code,
-        khoNhan: v.warehouse_code || "—",
+        khoNhan: warehouseShortLabel({ code: v.warehouse_code }),
       });
     },
     onSuccess: invalidate,
