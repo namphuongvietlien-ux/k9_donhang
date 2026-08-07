@@ -682,7 +682,13 @@ function VariantManager() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+      <Dialog
+        open={addOpen}
+        onOpenChange={(open) => {
+          if (createSkuM.isPending) return;
+          setAddOpen(open);
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Thêm mã hàng mới</DialogTitle>
@@ -701,6 +707,7 @@ function VariantManager() {
                 <Label className="text-xs">{label}</Label>
                 <Input
                   value={addForm[k]}
+                  disabled={createSkuM.isPending}
                   onChange={(e) => {
                     const v = e.target.value;
                     setAddForm((f) => ({
@@ -721,10 +728,16 @@ function VariantManager() {
             ))}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAddOpen(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={createSkuM.isPending}
+              onClick={() => setAddOpen(false)}
+            >
               Hủy
             </Button>
             <Button
+              type="button"
               disabled={createSkuM.isPending}
               onClick={() => void onCreateSku()}
             >
