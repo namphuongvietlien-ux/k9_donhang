@@ -574,19 +574,30 @@ export default function BanKemDvPanel() {
         "Số HĐ",
         "CN",
         "Loại",
+        "Mã hàng",
+        "Mã vạch",
         "Tên hàng / DV",
+        "ĐVT",
         "SL",
+        "Đơn giá",
+        "Phí DV",
         "Thành tiền",
+        "Ghi chú dòng",
       ],
     ];
 
     let detailStt = 1;
     list.forEach((v, idx) => {
+      const cnLabel = warehouseShortLabel({
+        code: v.warehouse_code,
+        short_name: null,
+        name: v.warehouse_name,
+      });
       listAoa.push([
         idx + 1,
         v.voucher_code || "",
         v.invoice_no || "",
-        v.warehouse_code || "",
+        cnLabel,
         v.warehouse_name || "",
         v.itemCount ?? 0,
         v.totalQty ?? 0,
@@ -595,19 +606,38 @@ export default function BanKemDvPanel() {
         format(new Date(v.created_at), "HH:mm dd/MM/yyyy", { locale: vi }),
         v.notes || "",
       ]);
-      for (const it of v.sales_voucher_items || []) {
+      const items = [...(v.sales_voucher_items || [])].sort(
+        (a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0),
+      );
+      for (const it of items) {
+        const isDv = it.line_kind === "DV";
         detailAoa.push([
           detailStt++,
           v.voucher_code || "",
           v.invoice_no || "",
-          v.warehouse_code || "",
-          it.line_kind === "DV" ? "DV" : "Hàng",
+          cnLabel,
+          isDv ? "DV" : "Hàng",
+          it.product_slug || "",
+          it.barcode || "",
           it.product_name || "",
+          it.unit || "",
           Number(it.quantity) || 0,
+          Math.round(Number(it.unit_price) || 0),
+          isDv ? Math.round(Number(it.service_cost) || 0) : "",
           Math.round(Number(it.line_total) || 0),
+          it.line_notes || "",
         ]);
       }
     });
+
+    if (detailStt <= 1) {
+      toast({
+        title: "Thiếu dòng chi tiết",
+        description:
+          "Danh sách phiếu không kèm món hàng. Thử Làm mới rồi xuất lại.",
+        variant: "destructive",
+      });
+    }
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(
@@ -624,7 +654,7 @@ export default function BanKemDvPanel() {
     XLSX.writeFile(wb, `hoa-don-dich-vu_${stamp}.xlsx`);
     toast({
       title: "Đã xuất Excel",
-      description: `${list.length} phiếu · ${detailStt - 1} dòng chi tiết`,
+      description: `${list.length} phiếu · ${detailStt - 1} dòng chi tiết (sheet ChiTiet)`,
     });
   };
 

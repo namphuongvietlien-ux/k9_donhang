@@ -71,9 +71,12 @@ export function validateSalesLines(lines: CreateSalesLineInput[]): string[] {
 }
 
 function mapVoucherRow(v: SalesVoucher): SalesVoucher {
-  const items = v.sales_voucher_items || [];
+  const items = [...(v.sales_voucher_items || [])].sort(
+    (a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0),
+  );
   return {
     ...v,
+    sales_voucher_items: items,
     itemCount: items.length,
     totalQty: items.reduce((s, i) => s + (Number(i.quantity) || 0), 0),
   };
@@ -96,7 +99,10 @@ async function fetchSalesVouchers(opts: {
       `
       id, voucher_code, invoice_no, warehouse_id, warehouse_code, warehouse_name,
       status, notes, total_amount, created_by, created_at, updated_at,
-      sales_voucher_items ( id, quantity, line_kind, product_name, line_total )
+      sales_voucher_items (
+        id, product_slug, barcode, product_name, unit, quantity,
+        unit_price, line_total, line_kind, service_cost, line_notes, sort_order
+      )
     `,
     )
     .gte("created_at", since.toISOString())
@@ -133,7 +139,10 @@ async function fetchSalesVouchers(opts: {
           `
           id, voucher_code, invoice_no, warehouse_id, warehouse_code, warehouse_name,
           status, notes, created_by, created_at, updated_at,
-          sales_voucher_items ( id, quantity, line_kind, product_name, line_total )
+          sales_voucher_items (
+            id, product_slug, barcode, product_name, unit, quantity,
+            unit_price, line_total, line_kind, service_cost, line_notes, sort_order
+          )
         `,
         )
         .gte("created_at", since.toISOString())
