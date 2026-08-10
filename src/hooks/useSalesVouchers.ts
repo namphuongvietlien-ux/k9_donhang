@@ -256,6 +256,15 @@ export function useRecentSalesVouchers(days = 7) {
   return useSalesVouchers({ days });
 }
 
+const SALES_VOUCHER_DETAIL_SELECT = `
+  id, voucher_code, invoice_no, warehouse_id, warehouse_code, warehouse_name,
+  status, notes, total_amount, created_by, created_at, updated_at,
+  sales_voucher_items (
+    id, voucher_id, product_slug, barcode, product_name, unit, quantity,
+    unit_price, line_total, line_kind, service_cost, line_notes, sort_order
+  )
+`;
+
 export function useSalesVoucher(id: string | null) {
   return useQuery({
     queryKey: ["sales-voucher", id],
@@ -263,11 +272,11 @@ export function useSalesVoucher(id: string | null) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("sales_vouchers")
-        .select(`*, sales_voucher_items ( * )`)
+        .select(SALES_VOUCHER_DETAIL_SELECT)
         .eq("id", id!)
         .maybeSingle();
       if (error) throw error;
-      return data as SalesVoucher | null;
+      return data ? mapVoucherRow(data as SalesVoucher) : null;
     },
   });
 }
@@ -280,11 +289,11 @@ export function useSalesVoucherByCode(code: string | null) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("sales_vouchers")
-        .select(`*, sales_voucher_items ( * )`)
+        .select(SALES_VOUCHER_DETAIL_SELECT)
         .eq("voucher_code", c)
         .maybeSingle();
       if (error) throw error;
-      return data as SalesVoucher | null;
+      return data ? mapVoucherRow(data as SalesVoucher) : null;
     },
   });
 }

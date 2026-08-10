@@ -76,12 +76,11 @@ const PageLoader = () => (
   </div>
 );
 
-// Configure QueryClient with optimized caching for production
+// Configure QueryClient — giảm PostgREST egress (ít refetch khi đổi tab)
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Cache data for 10 minutes (increased for production)
-      staleTime: 10 * 60 * 1000,
+      staleTime: 1000 * 60 * 5, // 5 phút
       // Keep unused data in cache for 1 hour (increased for production)
       gcTime: 60 * 60 * 1000,
       // Don't refetch on window focus for better UX and performance

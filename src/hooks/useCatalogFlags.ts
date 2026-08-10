@@ -289,8 +289,8 @@ export function useSaveCatalogFlags() {
       }
       return { changed };
     },
-    onSuccess: async () => {
-      await Promise.all([
+    onSuccess: () => {
+      void Promise.all([
         qc.invalidateQueries({ queryKey: ["catalog-flag-admin"] }),
         qc.invalidateQueries({ queryKey: ["new-products-strip"] }),
         qc.invalidateQueries({ queryKey: ["packing-summary-meta"] }),

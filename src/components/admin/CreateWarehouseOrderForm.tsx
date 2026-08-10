@@ -9,10 +9,7 @@ import {
 import {
   Download,
   Loader2,
-  Minus,
-  Plus,
   RefreshCw,
-  Trash2,
 } from "lucide-react";
 import { useWarehouses, warehouseLabel as formatWhLabel } from "@/hooks/useWarehouses";
 import { useStoreScope } from "@/hooks/useStoreScope";
@@ -27,10 +24,8 @@ import {
   scoreCatalogItem,
 } from "@/lib/catalogSearch";
 import { checkCatalogAddBlocked } from "@/lib/catalogAddGuards";
-import {
-  CatalogSuggestItem,
-  CatalogSuggestList,
-} from "@/components/admin/CatalogSuggestDropdown";
+import { ProductSearchInput } from "@/components/admin/ProductSearchInput";
+import { OrderItemsGrid } from "@/components/admin/OrderItemsGrid";
 import {
   inferPackingDayFromCreatedAt,
   getPackingSaveBanner,
@@ -38,15 +33,17 @@ import {
   normalizeOrderCodeText,
 } from "@/lib/packingWindows";
 import {
-  buildSkuUnitIndex,
   expandProductUnitOptions,
   getSkuUnitOptions,
   isLoiMaSku,
   resolveAvailableVariants,
-  resolveUnitOption,
   type CatalogProductRow,
   type SkuUnitOption,
 } from "@/lib/catalogUnitBarcode";
+import {
+  syncDraftLineUnit,
+  useSkuUnitIndex,
+} from "@/hooks/useVariantSync";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -68,20 +65,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import QtyInput, {
-  excelTableWrap,
-  excelTd,
-  excelTh,
-  excelTr,
-} from "@/components/ui/qty-input";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
@@ -307,10 +290,7 @@ const CreateWarehouseOrderForm = forwardRef<
       }));
   }, [catalog]);
 
-  const skuUnitIndex = useMemo(
-    () => buildSkuUnitIndex(catalogList as CatalogProductRow[]),
-    [catalogList],
-  );
+  const skuUnitIndex = useSkuUnitIndex(catalogList as CatalogProductRow[]);
 
   const suggestions = useMemo(
     () => filterCatalogSuggestions(catalogList, scan, 12),
@@ -504,25 +484,10 @@ const CreateWarehouseOrderForm = forwardRef<
     setLines((prev) =>
       prev.map((l) => {
         if (l.key !== key) return l;
-        const liveOpts = getSkuUnitOptions(skuUnitIndex, l.maHang);
-        const opts = liveOpts.length > 0 ? liveOpts : l.unitOptions;
-        if (!opts.length) {
-          return { ...l, dvt };
-        }
-        const match = resolveUnitOption(opts, dvt);
-        if (!match) {
-          return { ...l, dvt, maVach: "", unitOptions: opts };
-        }
-        return {
-          ...l,
-          dvt: match.unit,
-          // Bắt buộc đổi MV theo ĐVT (kể cả rỗng)
-          maVach: String(match.barcode ?? "").trim(),
-          productId: match.productId,
-          price: match.price || l.price,
-          stockQty: getQty(l.maHang, match.unit) ?? l.stockQty,
-          unitOptions: opts,
-        };
+        return syncDraftLineUnit(l, dvt, {
+          skuUnitIndex,
+          getStockQty: (ma, unit) => getQty(ma, unit),
+        });
       }),
     );
   };
@@ -737,25 +702,78 @@ const CreateWarehouseOrderForm = forwardRef<
 
       <div className="border rounded-lg p-4 space-y-3 bg-card relative">
         <div className="flex flex-wrap gap-2 items-end">
-          <div className="flex-1 min-w-[220px] space-y-1.5">
-            <Label>
-              Quét mã vạch, gõ mã, từ khóa tên (có/không dấu) hoặc 6 số cuối
-              vạch
-            </Label>
-            <Input
-              ref={scanRef}
-              value={scan}
-              onChange={(e) => setScan(e.target.value)}
-              onKeyDown={handleScanKey}
-              placeholder="Quét mã vạch, gõ mã, từ khóa tên (có/không dấu) hoặc 6 số cuối vạch:"
-              className="h-11 text-sm font-semibold border-2 border-primary"
-              autoComplete="off"
-            />
-            <p className="text-[11px] text-muted-foreground">
-              Quét khớp → +1. Không tìm thấy → thêm dòng{" "}
-              <strong>Lỗi Mã</strong> (không chặn lưu).
-            </p>
-          </div>
+          <ProductSearchInput
+            className="flex-1 min-w-[220px] space-y-1.5 relative"
+            label={
+              <Label>
+                Quét mã vạch, gõ mã, từ khóa tên (có/không dấu) hoặc 6 số cuối
+                vạch
+              </Label>
+            }
+            hint={
+              <p className="text-[11px] text-muted-foreground">
+                Quét khớp → +1. Không tìm thấy → thêm dòng{" "}
+                <strong>Lỗi Mã</strong> (không chặn lưu).
+              </p>
+            }
+            inputRef={scanRef}
+            value={scan}
+            onChange={setScan}
+            onKeyDown={handleScanKey}
+            open={!!scan.trim()}
+            onOpenChange={() => {}}
+            showWhenTyping
+            loading={catalogLoading}
+            loadingText={
+              <>
+                Đang tải danh mục
+                {catalogList.length
+                  ? ` (${catalogList.length.toLocaleString("vi-VN")} mã)…`
+                  : "…"}
+              </>
+            }
+            suggestions={suggestions}
+            onPick={(p) => addProduct(p as CatalogHit)}
+            placeholder="Quét mã vạch, gõ mã, từ khóa tên (có/không dấu) hoặc 6 số cuối vạch:"
+            inputClassName="h-11 text-sm font-semibold border-2 border-primary"
+            listClassName="left-4 right-4 top-[7.5rem] mt-0"
+            emptyText={
+              <>
+                Không tìm thấy — Enter để thêm <strong>Lỗi Mã</strong>.
+                {catalogList.length ? (
+                  <span className="block text-[11px] mt-1">
+                    Đã tải {catalogList.length.toLocaleString("vi-VN")} mã · thử{" "}
+                    <button
+                      type="button"
+                      className="underline text-primary"
+                      onClick={() => void refetchCatalog()}
+                    >
+                      tải lại danh mục
+                    </button>
+                  </span>
+                ) : null}
+              </>
+            }
+            unitLabel={(p) => {
+              const units = getSkuUnitOptions(skuUnitIndex, p.slug);
+              return units.map((u) => u.unit).join("/") || p.unit || "cái";
+            }}
+            barcodeLabel={(p) =>
+              [p.barcode, p.barcode_2].filter(Boolean).join(" · ") || "—"
+            }
+            renderExtraMeta={(p) => {
+              const ton =
+                getQty(p.slug, p.unit) ??
+                getQty(p.barcode || "", p.unit) ??
+                getQty(p.barcode_2 || "", p.unit_2);
+              return (
+                <>
+                  {" "}
+                  • Tồn: {ton != null ? ton : "—"}
+                </>
+              );
+            }}
+          />
           <Button
             type="button"
             variant="outline"
@@ -776,62 +794,6 @@ const CreateWarehouseOrderForm = forwardRef<
             Mẫu Excel
           </Button>
         </div>
-
-        {scan.trim() && (
-          <CatalogSuggestList className="left-4 right-4 top-[7.5rem] mt-0">
-            {catalogLoading ? (
-              <div className="p-3 text-sm text-muted-foreground flex items-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" /> Đang tải danh mục
-                {catalogList.length
-                  ? ` (${catalogList.length.toLocaleString("vi-VN")} mã)…`
-                  : "…"}
-              </div>
-            ) : suggestions.length === 0 ? (
-              <div className="p-3 text-sm text-muted-foreground">
-                Không tìm thấy — Enter để thêm <strong>Lỗi Mã</strong>.
-                {catalogList.length ? (
-                  <span className="block text-[11px] mt-1">
-                    Đã tải {catalogList.length.toLocaleString("vi-VN")} mã · thử{" "}
-                    <button
-                      type="button"
-                      className="underline text-primary"
-                      onClick={() => void refetchCatalog()}
-                    >
-                      tải lại danh mục
-                    </button>
-                  </span>
-                ) : null}
-              </div>
-            ) : (
-              suggestions.map((p) => {
-                const ton =
-                  getQty(p.slug, p.unit) ??
-                  getQty(p.barcode || "", p.unit) ??
-                  getQty(p.barcode_2 || "", p.unit_2);
-                const units = getSkuUnitOptions(skuUnitIndex, p.slug);
-                const dvtLabel =
-                  units.map((u) => u.unit).join("/") || p.unit || "cái";
-                const mvLabel =
-                  [p.barcode, p.barcode_2].filter(Boolean).join(" · ") || "—";
-                return (
-                  <CatalogSuggestItem
-                    key={p.id}
-                    product={p}
-                    unitLabel={dvtLabel}
-                    barcodeLabel={mvLabel}
-                    extraMeta={
-                      <>
-                        {" "}
-                        • Tồn: {ton != null ? ton : "—"}
-                      </>
-                    }
-                    onSelect={() => addProduct(p)}
-                  />
-                );
-              })
-            )}
-          </CatalogSuggestList>
-        )}
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
           <span>
@@ -862,236 +824,18 @@ const CreateWarehouseOrderForm = forwardRef<
           ) : null}
         </div>
 
-        <div
-          className={cn(
-            excelTableWrap,
-            "mt-1 max-h-[min(65vh,640px)] border-teal-200/80",
-          )}
-        >
-          <Table stickyHeader>
-            <TableHeader>
-              <TableRow>
-                <TableHead className={cn(excelTh, "w-10")}>STT</TableHead>
-                <TableHead className={cn(excelTh, "text-left min-w-[100px]")}>
-                  Mã hàng
-                </TableHead>
-                <TableHead className={cn(excelTh, "text-left min-w-[120px]")}>
-                  Mã vạch
-                </TableHead>
-                <TableHead className={cn(excelTh, "text-left")}>
-                  Tên hàng
-                </TableHead>
-                <TableHead className={cn(excelTh, "w-32")}>ĐVT</TableHead>
-                <TableHead
-                  className={cn(excelTh, "text-right w-20 bg-emerald-100")}
-                >
-                  Tồn
-                </TableHead>
-                <TableHead className={cn(excelTh, "text-center w-32")}>
-                  SL
-                </TableHead>
-                <TableHead className={cn(excelTh, "w-10")} />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {lines.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={8}
-                    className={cn(
-                      excelTd,
-                      "text-center text-muted-foreground py-8 h-auto",
-                    )}
-                  >
-                    Chưa có mặt hàng. Quét mã vạch / tìm SKU rồi Enter.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                lines.map((l, idx) => {
-                  const loi = isLoiMaSku(l.maHang);
-                  const liveOpts = getSkuUnitOptions(skuUnitIndex, l.maHang);
-                  const unitOpts =
-                    liveOpts.length > 0 ? liveOpts : l.unitOptions;
-                  const isCustom =
-                    !!l.isCustomSku || (!l.productId && !unitOpts.length);
-                  const hasUnits = unitOpts.length > 0 && !isCustom;
-                  const unitLocked = unitOpts.length === 1 && !isCustom;
-                  const tonLive =
-                    getQty(l.maHang, l.dvt) ??
-                    getQty(l.maVach, l.dvt) ??
-                    l.stockQty;
-                  return (
-                    <TableRow
-                      key={l.key}
-                      className={cn(
-                        excelTr,
-                        (loi || isCustom) && "bg-emerald-50/70",
-                        !loi && !isCustom && idx % 2 === 1 && "bg-slate-50/70",
-                      )}
-                    >
-                      <TableCell
-                        className={cn(
-                          excelTd,
-                          "text-muted-foreground text-center",
-                        )}
-                      >
-                        {lines.length - idx}
-                      </TableCell>
-                      <TableCell className={excelTd}>
-                        <div
-                          className={cn(
-                            "font-mono text-[13px] font-bold leading-tight uppercase",
-                            loi && "text-red-700",
-                            isCustom && "text-emerald-800",
-                          )}
-                          title={isCustom ? "Hàng mới — sẽ upsert vào danh mục khi lưu" : undefined}
-                        >
-                          {normalizeOrderCodeText(l.maHang) || l.maHang}
-                          {isCustom ? (
-                            <span className="ml-1 text-[10px] font-semibold text-emerald-700">
-                              MỚI
-                            </span>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                      <TableCell className={excelTd}>
-                        <Input
-                          className={cn(
-                            "h-7 text-sm font-mono p-1",
-                            hasUnits && !loi && "bg-muted",
-                          )}
-                          value={l.maVach}
-                          readOnly={hasUnits && !loi && !isCustom}
-                          onChange={(e) =>
-                            setLineBarcode(l.key, e.target.value)
-                          }
-                          placeholder="Mã vạch"
-                          title={
-                            hasUnits && !loi && !isCustom
-                              ? "Đổi ĐVT để đổi mã vạch theo catalog"
-                              : undefined
-                          }
-                        />
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          excelTd,
-                          "font-medium text-[13px]",
-                          loi && "text-red-700",
-                        )}
-                      >
-                        {isCustom || loi ? (
-                          <Input
-                            className="h-7 text-sm p-1"
-                            value={l.tenHang}
-                            onChange={(e) =>
-                              setLineName(l.key, e.target.value)
-                            }
-                            placeholder="Tên hàng *"
-                          />
-                        ) : (
-                          l.tenHang
-                        )}
-                      </TableCell>
-                      <TableCell className={excelTd}>
-                        {!hasUnits || loi || isCustom ? (
-                          <Input
-                            className="h-7 text-sm p-1"
-                            value={l.dvt}
-                            onChange={(e) =>
-                              setLineUnit(l.key, e.target.value)
-                            }
-                            placeholder="ĐVT"
-                          />
-                        ) : (
-                          <Select
-                            value={
-                              resolveUnitOption(unitOpts, l.dvt)?.unit ||
-                              unitOpts[0]?.unit ||
-                              l.dvt
-                            }
-                            onValueChange={(v) => setLineUnit(l.key, v)}
-                            disabled={unitLocked}
-                          >
-                            <SelectTrigger
-                              className={cn(
-                                "h-7 text-[13px]",
-                                unitLocked && "opacity-80",
-                              )}
-                            >
-                              <SelectValue placeholder="Chọn ĐVT" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {unitOpts.map((u) => (
-                                <SelectItem key={`${u.unit}-${u.barcode}`} value={u.unit}>
-                                  {u.unit}
-                                  {u.barcode ? ` · ${u.barcode}` : ""}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        )}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          excelTd,
-                          "text-right tabular-nums bg-emerald-50/60 font-semibold",
-                          tonLive != null &&
-                            tonLive < l.quantity &&
-                            "text-red-700",
-                        )}
-                      >
-                        {loi ? "—" : tonLive != null ? tonLive : "—"}
-                      </TableCell>
-                      <TableCell className={excelTd}>
-                        <div className="flex items-center justify-center gap-0.5">
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="outline"
-                            className="h-7 w-7 shrink-0"
-                            onClick={() => setQty(l.key, l.quantity - 1)}
-                          >
-                            <Minus className="w-3 h-3" />
-                          </Button>
-                          <QtyInput
-                            className="w-12 text-center h-7 p-1"
-                            value={l.quantity}
-                            onValueChange={(v) => setQty(l.key, v)}
-                          />
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="outline"
-                            className="h-7 w-7 shrink-0"
-                            onClick={() => setQty(l.key, l.quantity + 1)}
-                          >
-                            <Plus className="w-3 h-3" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                      <TableCell className={excelTd}>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          onClick={() =>
-                            setLines((prev) =>
-                              prev.filter((x) => x.key !== l.key),
-                            )
-                          }
-                        >
-                          <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
+        <OrderItemsGrid
+          lines={lines}
+          skuUnitIndex={skuUnitIndex}
+          getQty={getQty}
+          onQty={setQty}
+          onUnit={setLineUnit}
+          onBarcode={setLineBarcode}
+          onName={setLineName}
+          onRemove={(key) =>
+            setLines((prev) => prev.filter((x) => x.key !== key))
+          }
+        />
 
         <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
           <div className="text-base font-semibold">

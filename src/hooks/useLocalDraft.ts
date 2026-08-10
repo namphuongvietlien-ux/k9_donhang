@@ -67,20 +67,23 @@ export function useLocalDraft<T>({
   const valueRef = useRef(value);
   valueRef.current = value;
 
-  // Restore 1 lần khi mount
+  // Ổn định onRestore — tránh re-run khi parent truyền inline callback
+  const onRestoreRef = useRef(onRestore);
+  onRestoreRef.current = onRestore;
+
+  // Restore 1 lần khi mount / đổi key
   useEffect(() => {
     if (restoredRef.current) return;
     restoredRef.current = true;
     const draft = readJson<T>(storageKey);
-    if (!draft || !onRestore) return;
+    const restore = onRestoreRef.current;
+    if (!draft || !restore) return;
     skipSaveRef.current = true;
-    const ok = onRestore(draft);
-    // Cho phép state settle rồi mới bật lại auto-save
+    restore(draft);
     window.setTimeout(() => {
       skipSaveRef.current = false;
     }, 50);
-    if (ok === false) return;
-  }, [storageKey, onRestore]);
+  }, [storageKey]);
 
   // Debounced auto-save
   useEffect(() => {

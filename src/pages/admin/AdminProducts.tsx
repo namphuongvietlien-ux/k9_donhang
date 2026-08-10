@@ -82,13 +82,17 @@ const AdminProducts = () => {
 
   const fetchProducts = async () => {
     try {
+      // Không select(*) — bỏ cột nặng (gallery/html…); giới hạn 300 bản ghi mới nhất
+      const selectCols =
+        "id, name, slug, description, price, original_price, image_url, category, badge, has_gift, is_active, stock_quantity, low_stock_threshold, cost_price, average_cost, created_at, is_new, is_out_stock, is_locked, unit, barcode";
       const { data, error } = await supabase
         .from("products")
-        .select("*")
-        .order("created_at", { ascending: false });
+        .select(selectCols)
+        .order("created_at", { ascending: false })
+        .limit(300);
 
       if (error) throw error;
-      setProducts(data || []);
+      setProducts((data as Product[]) || []);
     } catch (error) {
       toast({
         variant: "destructive",

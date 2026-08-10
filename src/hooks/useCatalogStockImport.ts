@@ -128,7 +128,7 @@ export function useCatalogForImport() {
 
       return { products: data, bySlug };
     },
-    staleTime: 60_000,
+    staleTime: 1000 * 60 * 5,
   });
 }
 
