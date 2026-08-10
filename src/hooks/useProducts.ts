@@ -49,7 +49,6 @@ export function useProducts() {
           id,
           name,
           slug,
-          code,
           barcode,
           unit,
           unit_name,
