@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { format } from "date-fns";
+import { useProducts } from "@/hooks/useProducts";
+import { normalizeOrderCodeText } from "@/lib/packingWindows";
 import { vi } from "date-fns/locale";
 import { Eye, Loader2, Upload } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -140,6 +142,7 @@ const AdminOrders = () => {
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const { toast } = useToast();
   const [importOpen, setImportOpen] = useState(false);
+  const { products: sharedProducts = [] } = useProducts();
 
   const fetchOrders = async () => {
     try {
@@ -179,7 +182,28 @@ const AdminOrders = () => {
         .eq("order_id", orderId);
 
       if (error) throw error;
-      setOrderItems(data || []);
+
+      const enrichedItems = ((data as Array<Record<string, unknown>> | null) || []).map((item) => {
+        const rawItem = item as OrderItem & Record<string, unknown>;
+        const productMatch = sharedProducts.find((product) => {
+          if (rawItem.product_slug && product.slug) {
+            return normalizeOrderCodeText(product.slug) === normalizeOrderCodeText(rawItem.product_slug);
+          }
+          if (rawItem.product_name && product.name) {
+            return normalizeOrderCodeText(product.name) === normalizeOrderCodeText(rawItem.product_name);
+          }
+          return false;
+        });
+
+        return {
+          ...rawItem,
+          product_name: (rawItem.product_name as string | null) || productMatch?.name || "Sản phẩm",
+          product_slug: (rawItem.product_slug as string | null) || productMatch?.slug || null,
+          product_image: (rawItem.product_image as string | null) || productMatch?.image_url || null,
+        } as OrderItem;
+      });
+
+      setOrderItems(enrichedItems);
     } catch (error) {
       // Error handled silently
     } finally {

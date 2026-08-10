@@ -18,6 +18,7 @@ import { enrichWarehouseMeta, warehouseShortLabel } from "@/lib/warehouseMeta";
 import { notifyWarehouseEvent } from "@/lib/telegramNotify";
 import { toStockUnitKey } from "@/lib/stockKeys";
 import { ensureProductsForOrderLines } from "@/lib/ensureOrderProducts";
+import { useProducts, type Product } from "@/hooks/useProducts";
 
 export { warehouseShortLabel };
 
@@ -104,9 +105,10 @@ const ORDER_SELECT_BASIC = `
   order_items ( ${ITEM_SELECT} )
 `;
 
-async function attachProductFlags(
+function attachProductFlags(
   items: WarehouseOrderItem[],
-): Promise<WarehouseOrderItem[]> {
+  products: Product[],
+): WarehouseOrderItem[] {
   const slugs = [
     ...new Set(
       items
@@ -129,52 +131,18 @@ async function attachProductFlags(
     }
   >();
 
-  for (let i = 0; i < slugs.length; i += 200) {
-    const slice = slugs.slice(i, i + 200);
-    let data: unknown[] | null = null;
-    let error: { message?: string } | null = null;
-
-    const full = await supabase
-      .from("products")
-      .select(
-        "slug, is_new, is_out_stock, is_locked, barcode, unit, barcode_2, unit_2",
-      )
-      .in("slug", slice);
-    if (full.error && /barcode|unit_2|is_new/i.test(full.error.message || "")) {
-      const fallback = await supabase
-        .from("products")
-        .select("slug, barcode, unit")
-        .in("slug", slice);
-      data = fallback.data;
-      error = fallback.error;
-    } else {
-      data = full.data;
-      error = full.error;
-    }
-    if (error) {
-      // Chưa migration — bỏ qua enrich
-      return items;
-    }
-    for (const p of (data as {
-      slug: string;
-      is_new?: boolean;
-      is_out_stock?: boolean;
-      is_locked?: boolean;
-      barcode?: string | null;
-      unit?: string | null;
-      barcode_2?: string | null;
-      unit_2?: string | null;
-    }[] | null) || []) {
-      metaBySlug.set(normalizeOrderCodeText(p.slug), {
-        is_new: !!p.is_new,
-        is_out_stock: !!p.is_out_stock,
-        is_locked: !!p.is_locked,
-        barcode: p.barcode || null,
-        unit: p.unit || null,
-        barcode_2: p.barcode_2 || null,
-        unit_2: p.unit_2 || null,
-      });
-    }
+  for (const product of products) {
+    const slug = normalizeOrderCodeText(product.slug || "");
+    if (!slug) continue;
+    metaBySlug.set(slug, {
+      is_new: !!product.is_new,
+      is_out_stock: !!product.is_out_stock,
+      is_locked: !!product.is_locked,
+      barcode: product.barcode || null,
+      unit: product.unit || null,
+      barcode_2: (product as Product & { barcode_2?: string | null }).barcode_2 || null,
+      unit_2: (product as Product & { unit_2?: string | null }).unit_2 || null,
+    });
   }
 
   return items.map((it) => {
@@ -252,11 +220,12 @@ function mapOrder(row: Record<string, unknown>): WarehouseOrder {
   };
 }
 
-async function mapOrderWithFlags(
+function mapOrderWithFlags(
   row: Record<string, unknown>,
-): Promise<WarehouseOrder> {
+  products: Product[],
+): WarehouseOrder {
   const order = mapOrder(row);
-  order.order_items = await attachProductFlags(order.order_items);
+  order.order_items = attachProductFlags(order.order_items, products);
   return order;
 }
 
@@ -335,8 +304,13 @@ async function loadOrderTelegramCtx(orderId: string) {
 }
 
 export function useWarehouseOrders(filters: WarehouseOrderFilters = {}) {
+  const { products: sharedProducts = [] } = useProducts();
+  const productSignature = sharedProducts
+    .map((product) => `${product.id}:${product.slug || ""}:${product.is_new ? 1 : 0}:${product.is_out_stock ? 1 : 0}:${product.is_locked ? 1 : 0}`)
+    .join("|");
+
   return useQuery({
-    queryKey: ["warehouse-orders", filters],
+    queryKey: ["warehouse-orders", filters, productSignature],
     queryFn: async () => {
       let q = supabase
         .from("orders")
@@ -396,15 +370,22 @@ export function useWarehouseOrders(filters: WarehouseOrderFilters = {}) {
         );
       }
       if (error) throw error;
-      return ((data as unknown as Record<string, unknown>[]) || []).map(mapOrder);
+      return ((data as unknown as Record<string, unknown>[]) || []).map((row) =>
+        mapOrderWithFlags(row, sharedProducts),
+      );
     },
     staleTime: 15_000,
   });
 }
 
 export function useWarehouseOrder(orderId: string | null) {
+  const { products: sharedProducts = [] } = useProducts();
+  const productSignature = sharedProducts
+    .map((product) => `${product.id}:${product.slug || ""}:${product.is_new ? 1 : 0}:${product.is_out_stock ? 1 : 0}:${product.is_locked ? 1 : 0}`)
+    .join("|");
+
   return useQuery({
-    queryKey: ["warehouse-order", orderId],
+    queryKey: ["warehouse-order", orderId, productSignature],
     enabled: !!orderId,
     queryFn: async () => {
       let { data, error } = await supabase
@@ -444,7 +425,7 @@ export function useWarehouseOrder(orderId: string | null) {
         error = retry.error;
       }
       if (error) throw error;
-      return mapOrderWithFlags(data as unknown as Record<string, unknown>);
+      return mapOrderWithFlags(data as unknown as Record<string, unknown>, sharedProducts);
     },
   });
 }
