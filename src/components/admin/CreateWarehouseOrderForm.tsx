@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useWarehouses, warehouseLabel as formatWhLabel } from "@/hooks/useWarehouses";
 import { useStoreScope } from "@/hooks/useStoreScope";
-import { useCatalogForImport } from "@/hooks/useCatalogStockImport";
+import { useProducts } from "@/hooks/useProducts";
 import { useStock, usePackingSourceWarehouse } from "@/hooks/useStock";
 import { useWarehouseOrderMutations } from "@/hooks/useWarehouseOrders";
 import type { DuplicatePreSaveResult } from "@/hooks/useOrderImport";
@@ -152,8 +152,8 @@ const CreateWarehouseOrderForm = forwardRef<
   const { warehouses } = useWarehouses();
   const { warehouseId: scopedWhId, isStoreScoped, warehouseLabel: scopedLabel } =
     useStoreScope();
-  const { data: catalog, isLoading: catalogLoading, refetch: refetchCatalog } =
-    useCatalogForImport();
+  const { products, loading: catalogLoading, refreshProducts: refetchCatalog } =
+    useProducts();
   const { data: q7 } = usePackingSourceWarehouse();
   const { createOrder } = useWarehouseOrderMutations();
   const { toast } = useToast();
@@ -266,14 +266,9 @@ const CreateWarehouseOrderForm = forwardRef<
   }, [isStoreScoped, scopedWhId, loai]);
 
   const catalogList: CatalogHit[] = useMemo(() => {
-    const rows = (catalog?.products || []) as (CatalogProductRow & {
-      parent_sku?: string | null;
-      is_new?: boolean;
-      is_locked?: boolean;
-      is_out_stock?: boolean;
-    })[];
+    const rows = Array.isArray(products) ? products : [];
     return rows
-      .filter((p) => p.slug)
+      .filter((p) => p.is_active !== false && p.slug)
       .map((p) => ({
         id: p.id,
         name: p.name,
@@ -288,7 +283,7 @@ const CreateWarehouseOrderForm = forwardRef<
         is_locked: !!p.is_locked,
         is_out_stock: !!p.is_out_stock,
       }));
-  }, [catalog]);
+  }, [products]);
 
   const skuUnitIndex = useSkuUnitIndex(catalogList as CatalogProductRow[]);
 

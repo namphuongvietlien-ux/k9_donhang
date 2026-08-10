@@ -1,8 +1,8 @@
+import { useMemo } from "react";
 import { Loader2, Sparkles } from "lucide-react";
-import {
-  useNewProducts,
-  type NewProductCard,
-} from "@/hooks/useCatalogFlags";
+import { type NewProductCard } from "@/hooks/useCatalogFlags";
+import { useProducts, type Product } from "@/hooks/useProducts";
+import { normalizeOrderCodeText } from "@/lib/packingWindows";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,8 +22,44 @@ export default function NewProductsStrip({
   className,
   limit = 10,
 }: NewProductsStripProps) {
-  const { data, isLoading, error } = useNewProducts(limit);
-  const items = data || [];
+  const { products, loading: isLoading, error } = useProducts();
+  const items = useMemo<NewProductCard[]>(() => {
+    const visible = (products as Product[])
+      .filter((p) => p.is_active !== false && p.is_out_stock !== true)
+      .sort((a, b) => {
+        const aNew = a.is_new ? 1 : 0;
+        const bNew = b.is_new ? 1 : 0;
+        if (aNew !== bNew) return bNew - aNew;
+        const aMs = a.created_at ? Date.parse(a.created_at) : 0;
+        const bMs = b.created_at ? Date.parse(b.created_at) : 0;
+        return bMs - aMs;
+      })
+      .slice(0, limit)
+      .map((p, index) => ({
+        id: p.id,
+        maHang: normalizeOrderCodeText(p.slug || ""),
+        maVach: p.barcode || "",
+        tenHang: p.name,
+        dvt: p.unit || "Cái",
+        parentSku: normalizeOrderCodeText(p.parent_sku || ""),
+        ngayTao: p.created_at
+          ? new Date(p.created_at).toLocaleString("vi-VN", {
+              hour: "2-digit",
+              minute: "2-digit",
+              day: "2-digit",
+              month: "2-digit",
+              year: "numeric",
+            })
+          : "",
+        ngayMs: p.created_at ? Date.parse(p.created_at) : 0,
+        isNew: !!p.is_new,
+        isAdminPick: !!p.is_new,
+        reasonLabel: p.is_new ? "ADMIN CHỌN" : "THEO NGÀY TẠO",
+        rank: index + 1,
+      }));
+
+    return visible;
+  }, [products, limit]);
 
   if (isLoading) {
     return (

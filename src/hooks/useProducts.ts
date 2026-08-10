@@ -9,6 +9,8 @@ export interface Product {
   barcode?: string;
   unit?: string;
   unit_name?: string;
+  unit_2?: string | null;
+  barcode_2?: string | null;
   price?: number;
   original_price?: number | null;
   image_url?: string | null;
@@ -24,6 +26,7 @@ export interface Product {
   average_cost?: number | null;
   profit_margin?: number | null;
   auto_calculate_profit?: boolean;
+  parent_sku?: string | null;
   created_at?: string;
   is_new?: boolean;
   is_out_stock?: boolean;
@@ -50,6 +53,8 @@ export function useProducts() {
           barcode,
           unit,
           unit_name,
+          unit_2,
+          barcode_2,
           price,
           original_price,
           image_url,
@@ -65,6 +70,7 @@ export function useProducts() {
           average_cost,
           profit_margin,
           auto_calculate_profit,
+          parent_sku,
           created_at,
           is_new,
           is_out_stock,
