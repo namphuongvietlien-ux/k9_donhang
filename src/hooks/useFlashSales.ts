@@ -77,12 +77,12 @@ export const useActiveFlashSales = () => {
       return filteredData as FlashSale[];
     },
     staleTime: 30 * 1000, // 30 seconds - flash sales change frequently
-    refetchInterval: 60 * 1000, // Refetch every minute to update countdown
-    // Use placeholder data to avoid blocking render
+    // Keep data cached without periodic background polling.
     placeholderData: [],
     // Don't block initial render - fetch in background
     refetchOnMount: false,
     refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 };
 
@@ -136,10 +136,10 @@ export const useUpcomingFlashSales = () => {
       return filteredData as FlashSale[];
     },
     staleTime: 30 * 1000,
-    refetchInterval: 60 * 1000, // Refetch every minute to update countdown
     placeholderData: [],
     refetchOnMount: false,
     refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 };
 

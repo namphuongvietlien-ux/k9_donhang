@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Link } from "react-router-dom";
@@ -66,14 +66,6 @@ const SpiceHero = () => {
     const next = (currentSlide + 1) % slides.length;
     goToSlide(next);
   }, [currentSlide, slides.length, goToSlide]);
-
-  // Auto-advance slides every 5 seconds
-  useEffect(() => {
-    if (slides.length <= 1) return;
-    
-    const interval = setInterval(nextSlide, SLIDE_INTERVAL);
-    return () => clearInterval(interval);
-  }, [slides.length, nextSlide]);
 
   const currentBanner = slides[currentSlide];
   const isFirstSlide = currentSlide === 0;

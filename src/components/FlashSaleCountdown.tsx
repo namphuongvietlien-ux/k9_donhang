@@ -99,16 +99,6 @@ const FlashSaleCountdown = ({ startsAt, endsAt, className = "" }: FlashSaleCount
     };
 
     setTimeLeft(calculateTimeLeft());
-
-    const interval = setInterval(() => {
-      const newTimeLeft = calculateTimeLeft();
-      setTimeLeft(newTimeLeft);
-      if (newTimeLeft.state === "ended") {
-        clearInterval(interval);
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
   }, [startsAt, endsAt]);
 
   if (timeLeft.state === "ended") {

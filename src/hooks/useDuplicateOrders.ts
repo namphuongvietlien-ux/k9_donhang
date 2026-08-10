@@ -61,7 +61,7 @@ export function useDuplicateOrders(options?: {
   pollMs?: number;
 }) {
   const enabled = options?.enabled ?? true;
-  const pollMs = options?.pollMs ?? 60_000;
+  const pollMs = options?.pollMs ?? 0;
   const [alerts, setAlerts] = useState<DuplicateAlert[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -168,10 +168,12 @@ export function useDuplicateOrders(options?: {
   }, [enabled, options?.warehouseId]);
 
   useEffect(() => {
-    detect();
-    if (!enabled || !pollMs) return;
-    const t = setInterval(detect, pollMs);
-    return () => clearInterval(t);
+    void detect();
+    if (!enabled || !pollMs || pollMs <= 0) return;
+    const t = window.setInterval(() => {
+      void detect();
+    }, pollMs);
+    return () => window.clearInterval(t);
   }, [detect, enabled, pollMs]);
 
   const acceptDuplicate = useCallback(
