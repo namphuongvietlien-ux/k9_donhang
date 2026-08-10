@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { enrichWarehouseMeta } from "@/lib/warehouseMeta";
+import { useQuery } from "@tanstack/react-query";
 
 export interface Warehouse {
   id: string;
@@ -26,10 +26,6 @@ export function warehouseLabel(
   if (label === "Q4_275") return "Q4 Mới";
   return label;
 }
-
-import { useQuery } from "@tanstack/react-query";
-
-// (Giữ nguyên phần interface Warehouse và hàm warehouseLabel ở phía trên...)
 
 export function useWarehouses() {
   const { 
