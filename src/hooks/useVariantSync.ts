@@ -116,7 +116,7 @@ export function pickUnitFromCatalog(
     name: product.name,
     unit: match?.unit || product.unit || "cái",
     barcode: match?.barcode || product.barcode || "",
-    price: match?.price ?? Number(product.price) || 0,
+    price: (match?.price ?? Number(product.price)) || 0,
     productId: match?.productId || product.id,
     unitOptions: unitOpts,
   };
