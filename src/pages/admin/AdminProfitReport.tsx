@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useProducts } from "@/hooks/useProducts";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import { vi } from "date-fns/locale";
 import { supabase } from "@/integrations/supabase/client";
@@ -133,18 +134,10 @@ const AdminProfitReport = () => {
   });
 
   // Fetch products for category filter
-  const { data: products = [] } = useQuery({
-    queryKey: ["profit-products"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("products")
-        .select("slug, category")
-        .eq("is_active", true);
-
-      if (error) throw error;
-      return data;
-    },
-  });
+  const { products: sharedProducts = [] } = useProducts();
+  const products = (sharedProducts as Array<{ slug?: string; category?: string | null; is_active?: boolean }> || []).filter(
+    (product) => product.is_active !== false
+  );
 
   const categories = useMemo(() => {
     return Array.from(new Set(products.map((p) => p.category).filter(Boolean))).sort();

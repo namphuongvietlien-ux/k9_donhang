@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { useProducts } from "@/hooks/useProducts";
 import { cn } from "@/lib/utils";
 
 interface Product {
@@ -68,8 +69,8 @@ const AdminProducts = () => {
   const navigate = useNavigate();
   const { role } = useAuth();
   const isAdmin = role === "super_admin" || role === "manager";
+  const { products: sharedProducts, loading, error, refreshProducts } = useProducts();
   const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
@@ -80,29 +81,23 @@ const AdminProducts = () => {
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const { toast } = useToast();
 
-  const fetchProducts = async () => {
-    try {
-      // Không select(*) — bỏ cột nặng (gallery/html…); giới hạn 300 bản ghi mới nhất
-      const selectCols =
-        "id, name, slug, description, price, original_price, image_url, category, badge, has_gift, is_active, stock_quantity, low_stock_threshold, cost_price, average_cost, created_at, is_new, is_out_stock, is_locked, unit, barcode";
-      const { data, error } = await supabase
-        .from("products")
-        .select(selectCols)
-        .order("created_at", { ascending: false })
-        .limit(300);
+  useEffect(() => {
+    if (sharedProducts?.length) {
+      setProducts((sharedProducts as Product[]) || []);
+    } else {
+      setProducts([]);
+    }
+  }, [sharedProducts]);
 
-      if (error) throw error;
-      setProducts((data as Product[]) || []);
-    } catch (error) {
+  useEffect(() => {
+    if (error) {
       toast({
         variant: "destructive",
         title: "Lỗi",
         description: "Không thể tải danh sách sản phẩm",
       });
-    } finally {
-      setLoading(false);
     }
-  };
+  }, [error, toast]);
 
   const toggleProductFlag = async (
     product: Product,
@@ -123,6 +118,7 @@ const AdminProducts = () => {
         title: "Đã cập nhật mã",
         description: product.slug,
       });
+      await refreshProducts();
     } catch (e) {
       toast({
         variant: "destructive",
@@ -133,10 +129,6 @@ const AdminProducts = () => {
       setFlagBusyId(null);
     }
   };
-
-  useEffect(() => {
-    fetchProducts();
-  }, []);
 
   // Reset to page 1 when search or filters change
   useEffect(() => {
@@ -183,7 +175,8 @@ const AdminProducts = () => {
         title: "Đã xóa sản phẩm",
         description: `Sản phẩm "${deleteProduct.name}" đã được xóa`,
       });
-      fetchProducts();
+      setProducts((prev) => prev.filter((p) => p.id !== deleteProduct.id));
+      await refreshProducts();
     } catch (error) {
       toast({
         variant: "destructive",

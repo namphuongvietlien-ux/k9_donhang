@@ -24,6 +24,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { useProducts } from "@/hooks/useProducts";
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
 
@@ -54,25 +55,31 @@ const AdminInventoryReports = () => {
   const [lowStockData, setLowStockData] = useState<InventoryReport[]>([]);
   const [movementData, setMovementData] = useState<StockMovement[]>([]);
   const { toast } = useToast();
+  const { products: sharedProducts = [], loading: productsLoading } = useProducts();
 
   useEffect(() => {
+    if (productsLoading && sharedProducts.length === 0) return;
     fetchReportData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reportType, startDate, endDate]);
+  }, [reportType, startDate, endDate, sharedProducts, productsLoading]);
 
   const fetchReportData = async () => {
     setLoading(true);
     try {
       if (reportType === "overview" || reportType === "low_stock") {
-        const { data: products, error } = await supabase
-          .from("products")
-          .select("id, name, category, stock_quantity, min_stock_level, max_stock_level, average_cost, unit")
-          .eq("is_active", true)
-          .order("name");
+        const products = (sharedProducts as Array<{
+          id: string;
+          name: string;
+          category?: string | null;
+          stock_quantity?: number;
+          min_stock_level?: number;
+          max_stock_level?: number | null;
+          average_cost?: number | null;
+          unit?: string;
+          is_active?: boolean;
+        }> || []).filter((product) => product.is_active !== false);
 
-        if (error) throw error;
-
-        const reportData: InventoryReport[] = (products || []).map((p) => ({
+        const reportData: InventoryReport[] = products.map((p) => ({
           product_id: p.id,
           product_name: p.name,
           category: p.category,

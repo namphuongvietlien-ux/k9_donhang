@@ -37,7 +37,8 @@ import {
 } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
+import { useProducts } from "@/hooks/useProducts";
 import ImageUploader from "@/components/admin/ImageUploader";
 import DateTimePicker from "@/components/admin/DateTimePicker";
 import { cn } from "@/lib/utils";
@@ -207,27 +208,11 @@ const AdminFlashSaleForm = () => {
     }
   }, [id, navigate, toast]);
 
-  // Fetch all products for selection in dialog
-  // - Khi CREATE: chỉ lấy sản phẩm có stock > 0
-  // - Khi EDIT: lấy tất cả sản phẩm active (kể cả hết hàng) để có thể hiển thị và bỏ chọn sản phẩm đã có
-  const { data: allProducts = [] } = useQuery({
-    queryKey: ["all-products-for-flash-sale", id],
-    queryFn: async () => {
-      let query = supabase
-        .from("products")
-        .select("id, name, slug, price, image_url, is_active, stock_quantity")
-        .eq("is_active", true);
-
-      // Khi CREATE: chỉ lấy sản phẩm còn hàng
-      // Khi EDIT: lấy tất cả sản phẩm active (kể cả hết hàng) để hiển thị sản phẩm đã có trong Flash Sale
-      if (!id) {
-        query = query.gt("stock_quantity", 0);
-      }
-
-      const { data, error } = await query.order("name");
-      if (error) throw error;
-      return (data || []) as Product[];
-    },
+  const { products: sharedProducts = [] } = useProducts();
+  const allProducts = (sharedProducts as Product[]).filter((product) => {
+    if (product.is_active === false) return false;
+    if (!id) return (product.stock_quantity ?? 0) > 0;
+    return true;
   });
 
   // Filter products based on search query (name or id)

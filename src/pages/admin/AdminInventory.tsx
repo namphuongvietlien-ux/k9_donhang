@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { Package, AlertTriangle, TrendingUp, Eye, Loader2 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
 import AdminLayout from "@/components/admin/AdminLayout";
 import AdminPagination from "@/components/admin/AdminPagination";
 import AdminSearchBar, { SearchFilter } from "@/components/admin/AdminSearchBar";
@@ -17,6 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { useProducts } from "@/hooks/useProducts";
 import InventoryDetailDialog from "@/components/admin/InventoryDetailDialog";
 
 interface Product {
@@ -32,8 +32,8 @@ interface Product {
 }
 
 const AdminInventory = () => {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { products: sharedProducts, loading, error } = useProducts();
+  const products = (sharedProducts as Product[]) || [];
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [warningFilter, setWarningFilter] = useState<string>("all");
@@ -43,32 +43,15 @@ const AdminInventory = () => {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const { toast } = useToast();
 
-  const fetchProducts = async () => {
-    try {
-      const { data, error } = await supabase
-        .from("products")
-        .select("id, name, category, stock_quantity, min_stock_level, max_stock_level, average_cost, unit, is_active")
-        .order("name");
-
-      if (error) throw error;
-      setProducts(data || []);
-    } catch (error) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error("Error fetching products:", error);
-      }
+  useEffect(() => {
+    if (error) {
       toast({
         variant: "destructive",
         title: "Lỗi",
         description: "Không thể tải danh sách tồn kho",
       });
-    } finally {
-      setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchProducts();
-  }, []);
+  }, [error, toast]);
 
   useEffect(() => {
     setCurrentPage(1);

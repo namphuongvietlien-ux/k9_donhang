@@ -19,6 +19,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { useProducts } from "@/hooks/useProducts";
 
 interface Product {
   id: string;
@@ -39,8 +40,8 @@ const formatPrice = (price: number) => {
 };
 
 const AdminProductPricing = () => {
+  const { products: sharedProducts, loading, error, refreshProducts } = useProducts();
   const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
@@ -48,37 +49,26 @@ const AdminProductPricing = () => {
   const [itemsPerPage, setItemsPerPage] = useState(20);
   const { toast } = useToast();
 
+  useEffect(() => {
+    setProducts((sharedProducts as Product[]) || []);
+  }, [sharedProducts]);
+
+  useEffect(() => {
+    if (error) {
+      toast({
+        variant: "destructive",
+        title: "Lỗi",
+        description: "Không thể tải danh sách sản phẩm",
+      });
+    }
+  }, [error, toast]);
+
   // Local state for editing
   const [editingProducts, setEditingProducts] = useState<Record<string, {
     cost_price: number;
     profit_margin: number | null;
     auto_calculate_profit: boolean;
   }>>({});
-
-  const fetchProducts = async () => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from("products")
-        .select("id, name, slug, category, price, cost_price, average_cost, profit_margin, auto_calculate_profit, stock_quantity, is_active")
-        .order("name");
-
-      if (error) throw error;
-      setProducts(data || []);
-    } catch (error) {
-      toast({
-        variant: "destructive",
-        title: "Lỗi",
-        description: "Không thể tải danh sách sản phẩm",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchProducts();
-  }, []);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -264,7 +254,14 @@ const AdminProductPricing = () => {
       );
 
       await Promise.all(updates);
-      await fetchProducts();
+      await refreshProducts();
+      setProducts((prev) => prev.map((p) => {
+        const averageCostValue = p.average_cost ?? 0;
+        if (averageCostValue > 0 && (!p.cost_price || p.cost_price === 0)) {
+          return { ...p, cost_price: averageCostValue };
+        }
+        return p;
+      }));
 
       toast({
         title: "Đã cập nhật",

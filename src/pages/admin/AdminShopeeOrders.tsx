@@ -35,6 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useProducts } from "@/hooks/useProducts";
 import {
   useEcommerceOrders,
   useCreateEcommerceOrder,
@@ -133,19 +134,10 @@ const AdminShopeeOrders = () => {
   const { data: selectedOrderData } = useEcommerceOrder(selectedOrderId || "");
   const queryClient = useQueryClient();
 
-  // Fetch products for selection
-  const { data: products = [] } = useQuery({
-    queryKey: ["products"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("products")
-        .select("id, name, slug, price, stock_quantity")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data || [];
-    },
-  });
+  const { products: sharedProducts = [] } = useProducts();
+  const products = (sharedProducts as Array<{ id: string; name: string; slug?: string; price?: number; stock_quantity?: number; is_active?: boolean }> || []).filter(
+    (product) => product.is_active !== false
+  );
 
   // Fetch order items for all orders to calculate fees
   const { data: orderItemsMap = {} } = useQuery({

@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import { useProducts } from "@/hooks/useProducts";
 import { useQueryClient } from "@tanstack/react-query";
 
 interface Product {
@@ -114,6 +115,7 @@ const AdminProductForm = () => {
   const [isSlugManuallyEdited, setIsSlugManuallyEdited] = useState(false);
   const [uploadingVideo, setUploadingVideo] = useState(false);
   const [averageCost, setAverageCost] = useState<number | null>(null);
+  const { products: sharedProducts = [], loading: productsLoading } = useProducts();
 
   const [formData, setFormData] = useState({
     name: "",
@@ -160,62 +162,59 @@ const AdminProductForm = () => {
 
   const isEditing = !!id;
 
-  // Fetch product if editing
+  // Load product data from shared cache when editing
   useEffect(() => {
-    if (id) {
+    if (!id) return;
+
+    if (productsLoading) {
       setIsLoading(true);
-      const fetchProduct = async () => {
-        const { data, error } = await supabase
-          .from("products")
-          .select("*, average_cost")
-          .eq("id", id)
-          .single();
-
-        if (error) {
-          toast({
-            variant: "destructive",
-            title: "Lỗi",
-            description: "Không thể tải thông tin sản phẩm",
-          });
-          navigate("/admin/products");
-          return;
-        }
-
-        if (data) {
-          setAverageCost(data.average_cost);
-          setFormData({
-            name: data.name,
-            slug: data.slug,
-            description: data.description || "",
-            price: data.price,
-            original_price: data.original_price,
-            category: data.category || "",
-            badge: data.badge || "",
-            has_gift: data.has_gift,
-            is_active: data.is_active,
-            stock_quantity: data.stock_quantity,
-            low_stock_threshold: data.low_stock_threshold,
-            unit_name: data.unit_name || "Sản phẩm",
-            cost_price: data.cost_price || 0,
-            profit_margin: data.profit_margin,
-            auto_calculate_profit: data.auto_calculate_profit || false,
-            shipping_fee: data.shipping_fee,
-            free_shipping_threshold: data.free_shipping_threshold,
-            weight: data.weight,
-            package_length: data.package_length,
-            package_width: data.package_width,
-            package_height: data.package_height,
-          });
-          setImagePreview(data.image_url);
-          setVideoPreview(data.video_url || null);
-          setGalleryPreviews(Array.isArray(data.gallery_images) ? data.gallery_images : []);
-          setIsSlugManuallyEdited(true);
-        }
-        setIsLoading(false);
-      };
-      fetchProduct();
+      return;
     }
-  }, [id, navigate, toast]);
+
+    const product = (sharedProducts as Array<any> | undefined)?.find((item) => item.id === id);
+
+    if (!product) {
+      toast({
+        variant: "destructive",
+        title: "Lỗi",
+        description: "Không thể tải thông tin sản phẩm",
+      });
+      navigate("/admin/products");
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(true);
+    setAverageCost(product.average_cost ?? null);
+    setFormData({
+      name: product.name,
+      slug: product.slug,
+      description: product.description || "",
+      price: product.price,
+      original_price: product.original_price,
+      category: product.category || "",
+      badge: product.badge || "",
+      has_gift: product.has_gift,
+      is_active: product.is_active,
+      stock_quantity: product.stock_quantity,
+      low_stock_threshold: product.low_stock_threshold,
+      unit_name: product.unit_name || product.unit || "Sản phẩm",
+      cost_price: product.cost_price || 0,
+      profit_margin: product.profit_margin,
+      auto_calculate_profit: product.auto_calculate_profit || false,
+      shipping_fee: product.shipping_fee,
+      free_shipping_threshold: product.free_shipping_threshold,
+      weight: product.weight,
+      package_length: product.package_length,
+      package_width: product.package_width,
+      package_height: product.package_height,
+    });
+    setImagePreview(product.image_url);
+    setVideoPreview(product.video_url || null);
+    setGalleryPreviews(Array.isArray(product.gallery_images) ? product.gallery_images : []);
+    setIsSlugManuallyEdited(true);
+    setIsLoading(false);
+  }, [id, navigate, productsLoading, sharedProducts, toast]);
 
   // Fetch categories
   useEffect(() => {

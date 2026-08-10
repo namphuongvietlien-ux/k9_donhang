@@ -29,6 +29,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { useProducts } from "@/hooks/useProducts";
 import { format } from "date-fns";
 
 interface Product {
@@ -65,7 +66,8 @@ const StockInFormDialog = ({
   onSuccess,
 }: StockInFormDialogProps) => {
   const [loading, setLoading] = useState(false);
-  const [products, setProducts] = useState<Product[]>([]);
+  const { products: sharedProducts = [] } = useProducts();
+  const products = (sharedProducts as Product[]).filter((product) => product.is_active !== false);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [formData, setFormData] = useState({
     transaction_date: format(new Date(), "yyyy-MM-dd"),
@@ -89,7 +91,6 @@ const StockInFormDialog = ({
 
   useEffect(() => {
     if (open) {
-      fetchProducts();
       fetchSuppliers();
       // Reset form
       setFormData({
@@ -111,23 +112,6 @@ const StockInFormDialog = ({
       });
     }
   }, [open]);
-
-  const fetchProducts = async () => {
-    try {
-      const { data, error } = await supabase
-        .from("products")
-        .select("id, name, unit, stock_quantity")
-        .eq("is_active", true)
-        .order("name");
-
-      if (error) throw error;
-      setProducts(data || []);
-    } catch (error) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error("Error fetching products:", error);
-      }
-    }
-  };
 
   const fetchSuppliers = async () => {
     try {
