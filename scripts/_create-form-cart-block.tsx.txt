@@ -1,0 +1,154 @@
+      <div className="border rounded-lg p-4 space-y-3 bg-card relative">
+        <div className="flex flex-wrap gap-2 items-end">
+          <ProductSearchInput
+            className="flex-1 min-w-[220px] space-y-1.5 relative"
+            label={
+              <Label>
+                Quét mã vạch, gõ mã, từ khóa tên (có/không dấu) hoặc 6 số cuối
+                vạch
+              </Label>
+            }
+            hint={
+              <p className="text-[11px] text-muted-foreground">
+                Quét khớp → +1. Không tìm thấy → thêm dòng{" "}
+                <strong>Lỗi Mã</strong> (không chặn lưu).
+              </p>
+            }
+            inputRef={scanRef}
+            value={scan}
+            onChange={setScan}
+            onKeyDown={handleScanKey}
+            open={!!scan.trim()}
+            onOpenChange={() => {}}
+            showWhenTyping
+            loading={catalogLoading}
+            loadingText={
+              <>
+                Đang tải danh mục
+                {catalogList.length
+                  ? ` (${catalogList.length.toLocaleString("vi-VN")} mã)…`
+                  : "…"}
+              </>
+            }
+            suggestions={suggestions}
+            onPick={(p) => addProduct(p as CatalogHit)}
+            placeholder="Quét mã vạch, gõ mã, từ khóa tên (có/không dấu) hoặc 6 số cuối vạch:"
+            inputClassName="h-11 text-sm font-semibold border-2 border-primary"
+            listClassName="left-4 right-4 top-[7.5rem] mt-0"
+            emptyText={
+              <>
+                Không tìm thấy — Enter để thêm <strong>Lỗi Mã</strong>.
+                {catalogList.length ? (
+                  <span className="block text-[11px] mt-1">
+                    Đã tải {catalogList.length.toLocaleString("vi-VN")} mã · thử{" "}
+                    <button
+                      type="button"
+                      className="underline text-primary"
+                      onClick={() => void refetchCatalog()}
+                    >
+                      tải lại danh mục
+                    </button>
+                  </span>
+                ) : null}
+              </>
+            }
+            unitLabel={(p) => {
+              const units = getSkuUnitOptions(skuUnitIndex, p.slug);
+              return units.map((u) => u.unit).join("/") || p.unit || "cái";
+            }}
+            barcodeLabel={(p) =>
+              [p.barcode, p.barcode_2].filter(Boolean).join(" · ") || "—"
+            }
+            renderExtraMeta={(p) => {
+              const ton =
+                getQty(p.slug, p.unit) ??
+                getQty(p.barcode || "", p.unit) ??
+                getQty(p.barcode_2 || "", p.unit_2);
+              return (
+                <>
+                  {" "}
+                  • Tồn: {ton != null ? ton : "—"}
+                </>
+              );
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void refetchCatalog()}
+            disabled={catalogLoading}
+          >
+            <RefreshCw
+              className={cn("w-4 h-4 mr-2", catalogLoading && "animate-spin")}
+            />
+            Tải lại danh mục
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => downloadImportTemplate("orderDhDc")}
+          >
+            <Download className="w-4 h-4 mr-2" />
+            Mẫu Excel
+          </Button>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span>
+            Đang có{" "}
+            <strong className="text-foreground tabular-nums">
+              {lines.length}
+            </strong>{" "}
+            dòng · Tổng SL{" "}
+            <strong className="text-foreground tabular-nums">
+              {lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0)}
+            </strong>
+            {lines.length >= 80 ? (
+              <span className="ml-2 text-amber-700">
+                Đơn lớn — cuộn bảng bên dưới, header cố định.
+              </span>
+            ) : null}
+          </span>
+          {lines.length > 0 ? (
+            <button
+              type="button"
+              className="underline text-sky-700 hover:text-sky-900"
+              onClick={() => {
+                if (confirm(`Xóa toàn bộ ${lines.length} dòng?`)) setLines([]);
+              }}
+            >
+              Xóa hết dòng
+            </button>
+          ) : null}
+        </div>
+
+        <OrderItemsGrid
+          lines={lines}
+          skuUnitIndex={skuUnitIndex}
+          getQty={getQty}
+          onQty={setQty}
+          onUnit={setLineUnit}
+          onBarcode={setLineBarcode}
+          onName={setLineName}
+          onRemove={(key) =>
+            setLines((prev) => prev.filter((x) => x.key !== key))
+          }
+        />
+
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+          <div className="text-base font-semibold">
+            Tổng cộng: <span className="text-primary">{totalQty}</span> món
+          </div>
+          <Button
+            size="lg"
+            onClick={() => void handleSubmit()}
+            disabled={createOrder.isPending || lines.length === 0}
+          >
+            {createOrder.isPending ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : null}
+            Lưu đơn
+          </Button>
+        </div>
+      </div>
+

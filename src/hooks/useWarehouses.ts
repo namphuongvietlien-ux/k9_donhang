@@ -27,67 +27,35 @@ export function warehouseLabel(
   return label;
 }
 
+import { useQuery } from "@tanstack/react-query";
+
+// (Giữ nguyên phần interface Warehouse và hàm warehouseLabel ở phía trên...)
+
 export function useWarehouses() {
-  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { 
+    data: warehouses = [], 
+    isLoading: loading, 
+    error: queryError, 
+    refetch 
+  } = useQuery({
+    queryKey: ["warehouses-active"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("warehouses" as never)
+        .select("id, code, name, is_active, sort_order")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true });
+      
+      if (error) throw error;
+      return (data || []) as Warehouse[];
+    },
+    staleTime: 1000 * 60 * 5, // Cache 5 phút, chống spam API tuyệt đối!
+  });
 
-  const fetchWarehouses = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-
-    // Select cơ bản trước — tránh 400 khi chưa có cột address
-    const basic = await supabase
-      .from("warehouses" as never)
-      .select("id, code, name, is_active, sort_order")
-      .eq("is_active", true)
-      .order("sort_order", { ascending: true });
-
-    if (basic.error) {
-      setError(basic.error.message || "Lỗi tải kho");
-      setWarehouses([]);
-      setLoading(false);
-      return;
-    }
-
-    let rows = (basic.data as Warehouse[] | null) ?? [];
-
-    // Thử enrich từ DB nếu đã migration
-    const full = await supabase
-      .from("warehouses" as never)
-      .select("id, code, address, short_name, print_name")
-      .eq("is_active", true);
-    if (!full.error && full.data) {
-      const byId = new Map(
-        (
-          full.data as {
-            id: string;
-            address?: string | null;
-            short_name?: string | null;
-            print_name?: string | null;
-          }[]
-        ).map((w) => [w.id, w]),
-      );
-      rows = rows.map((w) => {
-        const extra = byId.get(w.id);
-        return enrichWarehouseMeta({
-          ...w,
-          address: extra?.address ?? null,
-          short_name: extra?.short_name ?? null,
-          print_name: extra?.print_name ?? null,
-        })!;
-      });
-    } else {
-      rows = rows.map((w) => enrichWarehouseMeta(w)!);
-    }
-
-    setWarehouses(rows);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    fetchWarehouses();
-  }, [fetchWarehouses]);
-
-  return { warehouses, loading, error, refetch: fetchWarehouses };
+  return {
+    warehouses,
+    loading,
+    error: queryError ? (queryError as Error).message : null,
+    refreshWarehouses: refetch, // Giữ nguyên tên hàm để không vỡ UI cũ
+  };
 }
