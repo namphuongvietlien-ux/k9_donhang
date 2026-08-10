@@ -338,29 +338,18 @@ const AdminFlashSaleForm = () => {
       const newProductIds = selectedProducts.filter((productId) => !previousProductIds.includes(productId));
 
       if (newProductIds.length > 0) {
-        // Chỉ validate những sản phẩm mới được thêm vào
-        const { data: newProductsData, error: stockCheckError } = await supabase
-          .from("products")
-          .select("id, name, stock_quantity")
-          .in("id", newProductIds);
-
-        if (stockCheckError) {
-          toast({
-            variant: "destructive",
-            title: "Lỗi",
-            description: "Không thể kiểm tra tồn kho sản phẩm",
-          });
-          setIsSubmitting(false);
-          return;
-        }
-
-        // Kiểm tra xem có sản phẩm MỚI nào hết hàng không (stock <= 0)
-        const outOfStockProducts = newProductsData?.filter(
-          (p) => !p.stock_quantity || p.stock_quantity <= 0
+        const productIndex = new Map(
+          allProducts.map((product) => [product.id, product]),
         );
+        const outOfStockProducts = newProductIds
+          .map((productId) => productIndex.get(productId))
+          .filter((product) => !product || !product.stock_quantity || product.stock_quantity <= 0);
 
-        if (outOfStockProducts && outOfStockProducts.length > 0) {
-          const productNames = outOfStockProducts.map((p) => p.name).join(", ");
+        if (outOfStockProducts.length > 0) {
+          const productNames = outOfStockProducts
+            .map((product) => product?.name)
+            .filter(Boolean)
+            .join(", ");
           toast({
             variant: "destructive",
             title: "Lỗi",

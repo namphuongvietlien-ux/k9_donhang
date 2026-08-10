@@ -13,7 +13,7 @@ import {
   useWarehouseOrder,
   useWarehouseOrderMutations,
 } from "@/hooks/useWarehouseOrders";
-import { useCatalogForImport } from "@/hooks/useCatalogStockImport";
+import { useProducts } from "@/hooks/useProducts";
 import {
   usePackingSourceWarehouse,
   useStock,
@@ -135,7 +135,7 @@ export default function WarehouseOrderDetail({
     username ||
     user?.email?.split("@")[0] ||
     "User";
-  const { data: catalog } = useCatalogForImport();
+  const { products: sharedProducts = [] } = useProducts();
   const { data: q7 } = usePackingSourceWarehouse();
   const stockWhId =
     order?.source_warehouse_id || order?.source_warehouse?.id || q7?.id || null;
@@ -163,19 +163,9 @@ export default function WarehouseOrderDetail({
   const qtyRef = useRef<HTMLInputElement>(null);
 
   const catalogList = useMemo((): CatalogHit[] => {
-    const rows = (catalog?.products || []) as Array<
-      CatalogProductRow & {
-        parent_sku?: string | null;
-        is_new?: boolean;
-        is_locked?: boolean;
-        is_out_stock?: boolean;
-        barcode_2?: string | null;
-        unit_2?: string | null;
-        price?: number | null;
-      }
-    >;
+    const rows = Array.isArray(sharedProducts) ? sharedProducts : [];
     return rows
-      .filter((p) => p.slug)
+      .filter((p) => p.is_active !== false && p.slug)
       .map((p) => ({
         id: p.id,
         name: p.name,
@@ -190,7 +180,7 @@ export default function WarehouseOrderDetail({
         is_locked: !!p.is_locked,
         is_out_stock: !!p.is_out_stock,
       }));
-  }, [catalog]);
+  }, [sharedProducts]);
 
   const skuUnitIndex = useMemo(
     () => buildSkuUnitIndex(catalogList as CatalogProductRow[]),

@@ -7,7 +7,7 @@ import {
   type PrintOrderDetail,
 } from "@/lib/orderPrint";
 import {
-  fetchProductMetaBySlugs,
+  buildProductMetaIndexFromProducts,
   getMeta,
   resolveLineUnitBarcode,
 } from "@/lib/productCatalogMeta";
@@ -38,6 +38,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useProducts } from "@/hooks/useProducts";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import {
@@ -82,6 +83,19 @@ interface PrintDayModalProps {
 
 async function fetchPrintDetails(
   orderIds: string[],
+  products: Array<{
+    slug?: string | null;
+    name?: string;
+    unit?: string | null;
+    barcode?: string | null;
+    unit_2?: string | null;
+    barcode_2?: string | null;
+    is_new?: boolean;
+    is_out_stock?: boolean;
+    is_locked?: boolean;
+    price?: number | null;
+    stock_quantity?: number | null;
+  }>,
 ): Promise<PrintOrderDetail[]> {
   // Select cơ bản trước — tránh 400 khi chưa migration address
   const { data, error } = await supabase
@@ -134,7 +148,7 @@ async function fetchPrintDetails(
       .map((it) => it.product_slug)
       .filter((s): s is string => !!s),
   );
-  const metaIndex = await fetchProductMetaBySlugs(slugs);
+  const metaIndex = buildProductMetaIndexFromProducts(products, slugs);
 
   const whLabel = (w: Raw["warehouse"] | Raw["source_warehouse"]) => {
     const e = enrichWarehouseMeta(w);
@@ -191,6 +205,7 @@ export default function PrintDayModal({
   defaultWarehouseId,
 }: PrintDayModalProps) {
   const { toast } = useToast();
+  const { products: sharedProducts = [] } = useProducts();
   const [whFilter, setWhFilter] = useState<string>("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -239,7 +254,7 @@ export default function PrintDayModal({
     }
     setBusy(true);
     try {
-      const details = await fetchPrintDetails(ids);
+      const details = await fetchPrintDetails(ids, sharedProducts);
       if (!details.length) throw new Error("Không tải được chi tiết đơn.");
       openMultiOrderPdfWindow(details, `In ${details.length} đơn — ${dateLabel}`);
       onOpenChange(false);

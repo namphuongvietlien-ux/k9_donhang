@@ -9,6 +9,20 @@ import {
   type CatalogProductRow,
 } from "@/lib/catalogUnitBarcode";
 
+interface ProductCatalogMetaSource {
+  slug?: string | null;
+  name?: string;
+  unit?: string | null;
+  barcode?: string | null;
+  unit_2?: string | null;
+  barcode_2?: string | null;
+  is_new?: boolean;
+  is_out_stock?: boolean;
+  is_locked?: boolean;
+  price?: number | null;
+  stock_quantity?: number | null;
+}
+
 function clampStockQty(n: unknown): number {
   const v = Number(n);
   if (!Number.isFinite(v)) return 0;
@@ -62,6 +76,49 @@ export function resolveLineUnitBarcode(
     barcode = opts.find((o) => o.barcode)?.barcode || null;
   }
   return { unit, barcode: barcode || null };
+}
+
+export function buildProductMetaIndexFromProducts(
+  products: ProductCatalogMetaSource[],
+  slugs: string[] = [],
+): ProductMetaIndex {
+  const map: ProductMetaIndex = new Map();
+  const requested = new Set(
+    slugs
+      .map((s) => String(s || "").trim())
+      .filter(Boolean)
+      .map((s) => normalizeOrderCodeText(s))
+      .filter(Boolean),
+  );
+
+  const rows = (products || []).filter((p) => {
+    if (!p.slug) return false;
+    if (!requested.size) return true;
+    const key = normalizeOrderCodeText(p.slug);
+    return !!key && requested.has(key);
+  });
+
+  for (const p of rows) {
+    if (!p.slug) continue;
+    const row: ProductCatalogMeta = {
+      slug: p.slug,
+      name: p.name || "Sản phẩm",
+      unit: p.unit || null,
+      barcode: p.barcode || null,
+      unit_2: p.unit_2 || null,
+      barcode_2: p.barcode_2 || null,
+      is_new: !!p.is_new,
+      is_out_stock: !!p.is_out_stock,
+      is_locked: !!p.is_locked,
+      price: Number(p.price) || 0,
+      stock_quantity:
+        p.stock_quantity == null ? null : clampStockQty(p.stock_quantity),
+    };
+    map.set(normalizeOrderCodeText(p.slug), row);
+    map.set(p.slug.trim().toUpperCase(), row);
+  }
+
+  return map;
 }
 
 /** Load meta theo danh sách slug (chuẩn hóa key). */

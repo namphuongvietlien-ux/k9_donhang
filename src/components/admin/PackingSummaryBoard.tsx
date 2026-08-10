@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
 import {
@@ -13,6 +12,7 @@ import {
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { useWarehouses, warehouseLabel } from "@/hooks/useWarehouses";
+import { useProducts } from "@/hooks/useProducts";
 import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import { usePackingOrders } from "@/hooks/useOrders";
 import { usePackingSourceWarehouse, useStock } from "@/hooks/useStock";
@@ -23,7 +23,7 @@ import {
   type PackingMode,
 } from "@/lib/packingWindows";
 import {
-  fetchProductMetaBySlugs,
+  buildProductMetaIndexFromProducts,
   getMeta,
   resolveLineUnitBarcode,
 } from "@/lib/productCatalogMeta";
@@ -125,15 +125,15 @@ export default function PackingSummaryBoard({
   }, [orders]);
 
   const {
-    data: metaIndex,
-    isLoading: metaLoading,
-    refetch: refetchMeta,
-  } = useQuery({
-    queryKey: ["packing-summary-meta", packingDate, mode, orderSlugs.join("|")],
-    enabled: orderSlugs.length > 0,
-    staleTime: 60_000,
-    queryFn: () => fetchProductMetaBySlugs(orderSlugs),
-  });
+    products: sharedProducts = [],
+    loading: productsLoading,
+    refreshProducts,
+  } = useProducts();
+
+  const metaIndex = useMemo(
+    () => buildProductMetaIndexFromProducts(sharedProducts, orderSlugs),
+    [sharedProducts, orderSlugs],
+  );
 
   const branchCodes = useMemo(() => {
     const codes = new Set<string>();
@@ -266,12 +266,12 @@ export default function PackingSummaryBoard({
   const shortCount = rows.filter(
     (r) => r.stockMapped && r.stockOnHand < r.orderedQty,
   ).length;
-  const loading = stockLoading || ordersLoading || whLoading || metaLoading;
+  const loading = stockLoading || ordersLoading || whLoading || productsLoading;
 
   const refresh = () => {
     refetchStock();
     refetchOrders();
-    void refetchMeta();
+    void refreshProducts();
   };
 
   const dateLabel = format(new Date(`${packingDate}T00:00:00`), "dd/MM/yyyy", {

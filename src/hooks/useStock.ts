@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { useProducts } from "@/hooks/useProducts";
 import { normalizeOrderCodeText } from "@/lib/packingWindows";
 import {
   normalizeUnitKey,
@@ -43,6 +44,7 @@ type ProductLite = {
   barcode: string | null;
   barcode_2?: string | null;
   stock_quantity?: number | null;
+  is_active?: boolean;
 };
 
 type FlatStock = {
@@ -207,90 +209,12 @@ async function fetchAllStockOnHandNested(
   return all;
 }
 
-async function fetchProductsByIds(
-  ids: string[],
-): Promise<Map<string, ProductLite>> {
-  const map = new Map<string, ProductLite>();
-  const unique = [...new Set(ids.filter(Boolean))];
-  if (!unique.length) return map;
-
-  for (let i = 0; i < unique.length; i += ID_CHUNK) {
-    const slice = unique.slice(i, i + ID_CHUNK);
-    const full = await supabase
-      .from("products")
-      .select("id, name, slug, unit, unit_2, barcode, barcode_2, stock_quantity")
-      .in("id", slice);
-
-    if (
-      full.error &&
-      /barcode_2|unit_2|stock_quantity/i.test(full.error.message || "")
-    ) {
-      const fb = await supabase
-        .from("products")
-        .select("id, name, slug, unit, barcode")
-        .in("id", slice);
-      if (fb.error) throw fb.error;
-      for (const p of (fb.data as ProductLite[] | null) ?? []) {
-        map.set(p.id, p);
-      }
-      continue;
-    }
-    if (full.error) throw full.error;
-    for (const p of (full.data as ProductLite[] | null) ?? []) {
-      map.set(p.id, p);
-    }
-  }
-  return map;
-}
-
-async function fetchProductStockFallback(): Promise<StockOnHandRow[]> {
-  const all: StockOnHandRow[] = [];
-  for (let from = 0; ; from += PAGE) {
-    const to = from + PAGE - 1;
-    const full = await supabase
-      .from("products")
-      .select("id, name, slug, unit, unit_2, barcode, barcode_2, stock_quantity")
-      .eq("is_active", true)
-      .not("stock_quantity", "is", null)
-      .order("id", { ascending: true })
-      .range(from, to);
-
-    if (full.error && /barcode_2|unit_2/i.test(full.error.message || "")) {
-      const fallback = await supabase
-        .from("products")
-        .select("id, name, slug, unit, barcode, stock_quantity")
-        .eq("is_active", true)
-        .not("stock_quantity", "is", null)
-        .order("id", { ascending: true })
-        .range(from, to);
-      if (fallback.error) throw fallback.error;
-      const chunk = (fallback.data as ProductLite[] | null) ?? [];
-      for (const p of chunk) {
-        const u = resolveUnitFields(p.unit, null, p.unit);
-        all.push({
-          productId: p.id,
-          productName: p.name,
-          productSlug: p.slug,
-          barcode: p.barcode,
-          barcode2: null,
-          quantity: clampStockQty(p.stock_quantity),
-          unit: u.unit,
-          unitKey: u.unitKey,
-          productUnit: p.unit,
-          productUnit2: null,
-          warehouseId: "",
-          source: "products",
-        });
-      }
-      if (chunk.length < PAGE) break;
-      continue;
-    }
-
-    if (full.error) throw full.error;
-    const chunk = (full.data as ProductLite[] | null) ?? [];
-    for (const p of chunk) {
+function fetchProductStockFallback(products: ProductLite[]): StockOnHandRow[] {
+  return products
+    .filter((p) => p.is_active !== false && p.stock_quantity != null)
+    .map((p) => {
       const u = resolveUnitFields(p.unit, null, p.unit);
-      all.push({
+      return {
         productId: p.id,
         productName: p.name,
         productSlug: p.slug,
@@ -302,16 +226,14 @@ async function fetchProductStockFallback(): Promise<StockOnHandRow[]> {
         productUnit: p.unit,
         productUnit2: p.unit_2 || null,
         warehouseId: "",
-        source: "products",
-      });
-    }
-    if (chunk.length < PAGE) break;
-  }
-  return all;
+        source: "products" as const,
+      };
+    });
 }
 
 async function loadStockForWarehouse(
   warehouseId: string,
+  products: ProductLite[],
 ): Promise<StockOnHandRow[]> {
   let fromSoh: StockOnHandRow[] = [];
   let sohError: Error | null = null;
@@ -319,9 +241,9 @@ async function loadStockForWarehouse(
   try {
     const flat = await fetchAllStockOnHandFlat(warehouseId);
     if (flat.length) {
-      const products = await fetchProductsByIds(flat.map((r) => r.product_id));
+      const productIndex = new Map(products.map((p) => [p.id, p]));
       fromSoh = flat.map((r) => {
-        const p = products.get(r.product_id);
+        const p = productIndex.get(r.product_id);
         const u = resolveUnitFields(r.unit, r.unit_key, p?.unit);
         return {
           productId: r.product_id,
@@ -351,7 +273,7 @@ async function loadStockForWarehouse(
 
   let fromProducts: StockOnHandRow[] = [];
   try {
-    fromProducts = await fetchProductStockFallback();
+    fromProducts = fetchProductStockFallback(products);
   } catch {
     fromProducts = [];
   }
@@ -523,12 +445,21 @@ function lookupRow(
  * Key = mã hàng + ĐVT.
  */
 export function useStock(warehouseId?: string | null, enabled = true) {
+  const { products } = useProducts();
+  const productsKey = useMemo(
+    () =>
+      products
+        .map((p) => `${p.id}:${p.slug || ""}:${p.stock_quantity ?? ""}`)
+        .join("|"),
+    [products],
+  );
+
   const query = useQuery({
-    queryKey: ["stock-on-hand", warehouseId],
+    queryKey: ["stock-on-hand", warehouseId, productsKey],
     enabled: enabled && !!warehouseId,
     staleTime: 30_000,
     retry: 1,
-    queryFn: () => loadStockForWarehouse(warehouseId!),
+    queryFn: () => loadStockForWarehouse(warehouseId!, products),
   });
 
   const index = useMemo(() => indexStock(query.data ?? []), [query.data]);
