@@ -43,44 +43,70 @@ export function useProducts() {
   } = useQuery({
     queryKey: ["shared-products-list"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("products" as never)
-        .select(`
-          id,
-          name,
-          slug,
-          barcode,
-          unit,
-          unit_name,
-          unit_2,
-          barcode_2,
-          price,
-          original_price,
-          image_url,
-          category,
-          badge,
-          has_gift,
-          is_active,
-          stock_quantity,
-          low_stock_threshold,
-          min_stock_level,
-          max_stock_level,
-          cost_price,
-          average_cost,
-          profit_margin,
-          auto_calculate_profit,
-          parent_sku,
-          created_at,
-          is_new,
-          is_out_stock,
-          is_locked
-        `)
-        .order("name", { ascending: true });
+      let allData: any[] = [];
+      let from = 0;
+      const step = 1000;
+      let fetchMore = true;
 
-      if (error) throw error;
-      return (data || []) as Product[];
+      // Vòng lặp tải dữ liệu cuốn chiếu để vượt qua giới hạn 1000 dòng của Supabase
+      while (fetchMore) {
+        const { data, error } = await supabase
+          .from("products" as never)
+          .select(`
+            id,
+            name,
+            slug,
+            barcode,
+            unit,
+            unit_name,
+            unit_2,
+            barcode_2,
+            price,
+            original_price,
+            image_url,
+            category,
+            badge,
+            has_gift,
+            is_active,
+            stock_quantity,
+            low_stock_threshold,
+            min_stock_level,
+            max_stock_level,
+            cost_price,
+            average_cost,
+            profit_margin,
+            auto_calculate_profit,
+            parent_sku,
+            created_at,
+            is_new,
+            is_out_stock,
+            is_locked
+          `)
+          .order("name", { ascending: true })
+          .range(from, from + step - 1);
+
+        if (error) {
+          console.error("Error fetching products:", error);
+          throw error;
+        }
+
+        // Nếu có dữ liệu trả về, gộp vào mảng tổng và tăng dải fetch (offset)
+        if (data && data.length > 0) {
+          allData = [...allData, ...data];
+          from += step;
+        }
+
+        // Nếu lượng dữ liệu trả về ít hơn step (1000), nghĩa là đã tải hết kho
+        if (!data || data.length < step) {
+          fetchMore = false;
+        }
+      }
+
+      return allData as Product[];
     },
-    staleTime: 1000 * 60 * 5, // Cache 5 phút, gom toàn bộ request sản phẩm vào một mối!
+    staleTime: 1000 * 60 * 5, // Cache 5 phút
+    gcTime: 1000 * 60 * 10, // Giữ cache rác trong 10 phút
+    refetchOnWindowFocus: false, // Tránh tự động gọi API ngầm khi bấm qua lại giữa các tab
   });
 
   return {

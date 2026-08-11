@@ -23,11 +23,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { resizeImage } from "@/utils/imageResize";
 
@@ -35,6 +30,8 @@ interface Product {
   id: string;
   name: string;
   slug: string;
+  barcode?: string | null;
+  unit?: string | null;
   description: string | null;
   price: number;
   original_price: number | null;
@@ -80,6 +77,8 @@ const badges = [
 const productSchema = z.object({
   name: z.string().min(1, "Vui lòng nhập tên sản phẩm").max(200),
   slug: z.string().min(1, "Vui lòng nhập slug").max(200),
+  barcode: z.string().optional().nullable(),
+  unit: z.string().min(1, "Vui lòng chọn đơn vị tính"),
   description: z.string().max(2000).optional(),
   price: z.number().min(0, "Giá phải >= 0"),
   original_price: z.number().min(0).optional().nullable(),
@@ -97,22 +96,25 @@ const productSchema = z.object({
   package_height: z.number().min(0).optional().nullable(),
 });
 
-// Slug generation functions are now imported from @/lib/slug
-
 const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFormDialogProps) => {
   const { toast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  
   const [categories, setCategories] = useState<Category[]>([]);
+  const [units, setUnits] = useState<string[]>([]); // Danh sách đơn vị tính động từ DB
+  
   const [showCategoryInput, setShowCategoryInput] = useState(false);
   const [newCategory, setNewCategory] = useState("");
-  const [isSlugManuallyEdited, setIsSlugManuallyEdited] = useState(false); // Track if user manually edited slug
+  const [isSlugManuallyEdited, setIsSlugManuallyEdited] = useState(false);
 
   const [formData, setFormData] = useState({
     name: "",
     slug: "",
+    barcode: "",
+    unit: "",
     description: "",
     price: 0,
     original_price: null as number | null,
@@ -130,22 +132,35 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
     package_height: null as number | null,
   });
 
-  // Fetch categories from categories table
+  // Fetch categories & Extract unique units from products
   useEffect(() => {
-    const fetchCategories = async () => {
-      const { data } = await supabase
+    const fetchDropdownData = async () => {
+      // 1. Lấy Categories
+      const { data: catData } = await supabase
         .from("categories")
         .select("id, name, slug")
         .eq("is_active", true)
         .order("display_order", { ascending: true });
       
-      if (data) {
-        setCategories(data);
+      if (catData) setCategories(catData);
+
+      // 2. Lấy Units từ các sản phẩm đã import
+      const { data: prodData } = await supabase
+        .from("products")
+        .select("unit, unit_2");
+        
+      if (prodData) {
+        const uniqueUnits = new Set<string>();
+        prodData.forEach(p => {
+          if (p.unit && p.unit.trim()) uniqueUnits.add(p.unit.trim());
+          if (p.unit_2 && p.unit_2.trim()) uniqueUnits.add(p.unit_2.trim());
+        });
+        setUnits(Array.from(uniqueUnits).sort());
       }
     };
     
     if (open) {
-      fetchCategories();
+      fetchDropdownData();
     }
   }, [open]);
 
@@ -154,6 +169,8 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
       setFormData({
         name: product.name,
         slug: product.slug,
+        barcode: product.barcode || "",
+        unit: product.unit || "",
         description: product.description || "",
         price: product.price,
         original_price: product.original_price,
@@ -171,11 +188,13 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
         package_height: product.package_height,
       });
       setImagePreview(product.image_url);
-      setIsSlugManuallyEdited(true); // When editing, assume slug was manually set
+      setIsSlugManuallyEdited(true);
     } else {
       setFormData({
         name: "",
         slug: "",
+        barcode: "",
+        unit: "",
         description: "",
         price: 0,
         original_price: null,
@@ -193,7 +212,7 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
         package_height: null,
       });
       setImagePreview(null);
-      setIsSlugManuallyEdited(false); // New product, slug will be auto-generated
+      setIsSlugManuallyEdited(false);
     }
     setImageFile(null);
     setErrors({});
@@ -205,47 +224,23 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate file type
     if (!file.type.startsWith("image/")) {
-      toast({
-        variant: "destructive",
-        title: "Lỗi",
-        description: "Vui lòng chọn file ảnh",
-      });
+      toast({ variant: "destructive", title: "Lỗi", description: "Vui lòng chọn file ảnh" });
       return;
     }
 
-    // Validate file size (before resize)
     if (file.size > 10 * 1024 * 1024) {
-      toast({
-        variant: "destructive",
-        title: "Lỗi",
-        description: "Kích thước ảnh tối đa 10MB (trước khi resize)",
-      });
+      toast({ variant: "destructive", title: "Lỗi", description: "Kích thước ảnh tối đa 10MB" });
       return;
     }
 
     try {
-      // Show loading state
-      toast({
-        title: "Đang xử lý ảnh...",
-        description: "Đang điều chỉnh kích thước ảnh về tiêu chuẩn (1000x1000px)",
-      });
-
-      // Resize image to 1000x1000 (Google recommended size)
+      toast({ title: "Đang xử lý ảnh...", description: "Đang điều chỉnh kích thước ảnh về tiêu chuẩn (1000x1000px)" });
       const resizedFile = await resizeImage(file, 1000, 0.9);
-      
       setImageFile(resizedFile);
       setImagePreview(URL.createObjectURL(resizedFile));
-      
-      toast({
-        title: "Thành công",
-        description: "Ảnh đã được điều chỉnh về kích thước tiêu chuẩn (tối đa 1000x1000px)",
-      });
+      toast({ title: "Thành công", description: "Ảnh đã được điều chỉnh về kích thước tiêu chuẩn" });
     } catch (error) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error("Error resizing image:", error);
-      }
       toast({
         variant: "destructive",
         title: "Lỗi",
@@ -257,20 +252,11 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
   const uploadImage = async (file: File): Promise<string> => {
     const fileExt = file.name.split(".").pop();
     const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
-    
-    const { error: uploadError } = await supabase.storage
-      .from("product-images")
-      .upload(fileName, file);
-
+    const { error: uploadError } = await supabase.storage.from("product-images").upload(fileName, file);
     if (uploadError) throw uploadError;
-
-    const { data } = supabase.storage
-      .from("product-images")
-      .getPublicUrl(fileName);
-
+    const { data } = supabase.storage.from("product-images").getPublicUrl(fileName);
     return data.publicUrl;
   };
-
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -280,9 +266,7 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
     if (!result.success) {
       const fieldErrors: Record<string, string> = {};
       result.error.errors.forEach((err) => {
-        if (err.path[0]) {
-          fieldErrors[err.path[0] as string] = err.message;
-        }
+        if (err.path[0]) fieldErrors[err.path[0] as string] = err.message;
       });
       setErrors(fieldErrors);
       return;
@@ -292,23 +276,18 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
 
     try {
       let imageUrl = product?.image_url || null;
+      if (imageFile) imageUrl = await uploadImage(imageFile);
 
-      if (imageFile) {
-        imageUrl = await uploadImage(imageFile);
-      }
-
-      // Ensure slug is generated if empty
       let finalSlug = formData.slug || generateSlug(formData.name);
-      
-      // Generate unique slug if needed (only for new products or if slug changed)
       if (!product || finalSlug !== product.slug) {
         finalSlug = await generateUniqueSlug(finalSlug, "products", product?.id);
       }
 
-      // Build productData
       const productData = {
         name: formData.name,
         slug: finalSlug,
+        barcode: formData.barcode || null,
+        unit: formData.unit,
         description: formData.description || null,
         price: formData.price,
         original_price: formData.original_price,
@@ -328,11 +307,7 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
       };
 
       if (product) {
-        const { error, data } = await supabase
-          .from("products")
-          .update(productData)
-          .eq("id", product.id);
-
+        const { error } = await supabase.from("products").update(productData).eq("id", product.id);
         if (error) {
           if (error.code === "23505") {
             setErrors({ slug: "Slug đã tồn tại, vui lòng chọn slug khác" });
@@ -341,14 +316,9 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
           }
           throw error;
         }
-
-        toast({
-          title: "Đã cập nhật sản phẩm",
-          description: `Sản phẩm "${formData.name}" đã được cập nhật`,
-        });
+        toast({ title: "Đã cập nhật sản phẩm", description: `Sản phẩm "${formData.name}" đã được cập nhật` });
       } else {
-        const { error, data } = await supabase.from("products").insert(productData);
-
+        const { error } = await supabase.from("products").insert(productData);
         if (error) {
           if (error.code === "23505") {
             setErrors({ slug: "Slug đã tồn tại, vui lòng chọn slug khác" });
@@ -357,20 +327,12 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
           }
           throw error;
         }
-
-        toast({
-          title: "Đã thêm sản phẩm",
-          description: `Sản phẩm "${formData.name}" đã được thêm`,
-        });
+        toast({ title: "Đã thêm sản phẩm", description: `Sản phẩm "${formData.name}" đã được thêm` });
       }
 
       onSuccess();
     } catch (error) {
-      toast({
-        variant: "destructive",
-        title: "Lỗi",
-        description: error instanceof Error ? error.message : "Không thể lưu sản phẩm",
-      });
+      toast({ variant: "destructive", title: "Lỗi", description: error instanceof Error ? error.message : "Không thể lưu sản phẩm" });
     } finally {
       setIsSubmitting(false);
     }
@@ -380,9 +342,7 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>
-            {product ? "Chỉnh sửa sản phẩm" : "Thêm sản phẩm mới"}
-          </DialogTitle>
+          <DialogTitle>{product ? "Chỉnh sửa sản phẩm" : "Thêm sản phẩm mới"}</DialogTitle>
           <DialogDescription>
             {product ? "Cập nhật thông tin sản phẩm" : "Điền thông tin để thêm sản phẩm mới vào hệ thống"}
           </DialogDescription>
@@ -396,19 +356,11 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
               <div className="relative w-32 h-32 border-2 border-dashed rounded-lg overflow-hidden flex items-center justify-center bg-muted">
                 {imagePreview ? (
                   <>
-                    <img
-                      src={imagePreview}
-                      alt="Preview"
-                      className="w-full h-full object-cover"
-                    />
+                    <img src={imagePreview} alt="Preview" className="w-full h-full object-cover" />
                     <button
                       type="button"
-                      onClick={() => {
-                        setImageFile(null);
-                        setImagePreview(null);
-                      }}
+                      onClick={() => { setImageFile(null); setImagePreview(null); }}
                       className="absolute top-1 right-1 p-1 bg-destructive text-destructive-foreground rounded-full"
-                      aria-label="Xóa hình ảnh"
                     >
                       <X className="w-3 h-3" />
                     </button>
@@ -417,12 +369,7 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
                   <label className="cursor-pointer flex flex-col items-center justify-center w-full h-full">
                     <Upload className="w-8 h-8 text-muted-foreground" />
                     <span className="text-xs text-muted-foreground mt-1">Upload</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleImageChange}
-                      className="hidden"
-                    />
+                    <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
                   </label>
                 )}
               </div>
@@ -445,7 +392,6 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
                 setFormData((prev) => ({
                   ...prev,
                   name,
-                  // Auto-generate slug only if user hasn't manually edited it
                   slug: isSlugManuallyEdited ? prev.slug : autoSlug,
                 }));
               }}
@@ -461,30 +407,56 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
                 id="slug"
                 value={formData.slug}
                 onChange={(e) => {
-                  setIsSlugManuallyEdited(true); // Mark as manually edited
+                  setIsSlugManuallyEdited(true);
                   setFormData((prev) => ({ ...prev, slug: e.target.value }));
                 }}
                 placeholder="slug-se-tu-dong-tao"
               />
               <Button
-                type="button"
-                variant="outline"
-                size="sm"
+                type="button" variant="outline" size="sm"
                 onClick={() => {
-                  const autoSlug = generateSlug(formData.name);
                   setIsSlugManuallyEdited(false);
-                  setFormData((prev) => ({ ...prev, slug: autoSlug }));
+                  setFormData((prev) => ({ ...prev, slug: generateSlug(formData.name) }));
                 }}
-                title="Tự động tạo slug từ tên sản phẩm"
-                aria-label="Tự động tạo slug từ tên sản phẩm"
               >
                 🔄
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Slug sẽ tự động được tạo từ tên sản phẩm. Bạn có thể chỉnh sửa thủ công nếu cần.
-            </p>
-            {errors.slug && <p className="text-sm text-destructive">{errors.slug}</p>}
+          </div>
+
+          {/* Barcode & Unit (MỚI THÊM VÀO ĐÂY) */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="barcode">Mã vạch / SKU</Label>
+              <Input
+                id="barcode"
+                value={formData.barcode}
+                onChange={(e) => setFormData((prev) => ({ ...prev, barcode: e.target.value }))}
+                placeholder="Nhập mã vạch..."
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Đơn vị tính *</Label>
+              <Select
+                value={formData.unit}
+                onValueChange={(value) => setFormData((prev) => ({ ...prev, unit: value }))}
+              >
+                <SelectTrigger className={errors.unit ? "border-destructive" : ""}>
+                  <SelectValue placeholder="Chọn đơn vị tính..." />
+                </SelectTrigger>
+                <SelectContent className="bg-popover max-h-60 overflow-y-auto">
+                  {units.map((u) => (
+                    <SelectItem key={u} value={u}>
+                      {u}
+                    </SelectItem>
+                  ))}
+                  {units.length === 0 && (
+                    <SelectItem value="none" disabled>Chưa có dữ liệu từ file import</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+              {errors.unit && <p className="text-sm text-destructive">{errors.unit}</p>}
+            </div>
           </div>
 
           {/* Description */}
@@ -502,9 +474,7 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
             <div className="space-y-2">
               <Label htmlFor="price">Giá bán (VNĐ) *</Label>
               <Input
-                id="price"
-                type="number"
-                value={formData.price}
+                id="price" type="number" value={formData.price}
                 onChange={(e) => setFormData((prev) => ({ ...prev, price: Number(e.target.value) }))}
               />
               {errors.price && <p className="text-sm text-destructive">{errors.price}</p>}
@@ -512,15 +482,8 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
             <div className="space-y-2">
               <Label htmlFor="original_price">Giá gốc (nếu có)</Label>
               <Input
-                id="original_price"
-                type="number"
-                value={formData.original_price || ""}
-                onChange={(e) =>
-                  setFormData((prev) => ({
-                    ...prev,
-                    original_price: e.target.value ? Number(e.target.value) : null,
-                  }))
-                }
+                id="original_price" type="number" value={formData.original_price || ""}
+                onChange={(e) => setFormData((prev) => ({ ...prev, original_price: e.target.value ? Number(e.target.value) : null }))}
               />
             </div>
           </div>
@@ -533,97 +496,49 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
                 <Select
                   value={formData.category}
                   onValueChange={(value) => {
-                    if (value === "__add_new__") {
-                      setShowCategoryInput(true);
-                    } else {
-                      setFormData((prev) => ({ ...prev, category: value }));
-                    }
+                    if (value === "__add_new__") setShowCategoryInput(true);
+                    else setFormData((prev) => ({ ...prev, category: value }));
                   }}
                 >
-                  <SelectTrigger className="flex-1">
-                    <SelectValue placeholder="Chọn danh mục" />
-                  </SelectTrigger>
+                  <SelectTrigger className="flex-1"><SelectValue placeholder="Chọn danh mục" /></SelectTrigger>
                   <SelectContent className="bg-popover">
                     {categories.map((cat) => (
-                      <SelectItem key={cat.id} value={cat.name}>
-                        {cat.name}
-                      </SelectItem>
+                      <SelectItem key={cat.id} value={cat.name}>{cat.name}</SelectItem>
                     ))}
                     <SelectItem value="__add_new__" className="text-primary">
-                      <span className="flex items-center gap-1">
-                        <Plus className="w-3 h-3" /> Thêm danh mục mới
-                      </span>
+                      <span className="flex items-center gap-1"><Plus className="w-3 h-3" /> Thêm danh mục mới</span>
                     </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               {showCategoryInput && (
                 <div className="flex gap-2 mt-2">
-                  <Input
-                    placeholder="Nhập tên danh mục mới"
-                    value={newCategory}
-                    onChange={(e) => setNewCategory(e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={async () => {
-                      if (newCategory.trim()) {
-                        // Add to categories table
-                        const slug = newCategory.trim().toLowerCase()
-                          .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-                          .replace(/đ/g, "d").replace(/[^a-z0-9]+/g, "-")
-                          .replace(/(^-|-$)/g, "");
-                        
-                        const { data, error } = await supabase
-                          .from("categories")
-                          .insert({ name: newCategory.trim(), slug })
-                          .select()
-                          .single();
-                        
-                        if (!error && data) {
-                          setFormData((prev) => ({ ...prev, category: newCategory.trim() }));
-                          setCategories((prev) => [...prev, data]);
-                          toast({ title: "Đã thêm danh mục mới" });
-                        } else {
-                          toast({ variant: "destructive", title: "Lỗi", description: "Không thể thêm danh mục" });
-                        }
-                        setShowCategoryInput(false);
-                        setNewCategory("");
+                  <Input placeholder="Nhập tên..." value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="flex-1" />
+                  <Button type="button" size="sm" onClick={async () => {
+                    if (newCategory.trim()) {
+                      const slug = newCategory.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+                      const { data, error } = await supabase.from("categories").insert({ name: newCategory.trim(), slug }).select().single();
+                      if (!error && data) {
+                        setFormData((prev) => ({ ...prev, category: newCategory.trim() }));
+                        setCategories((prev) => [...prev, data]);
+                        toast({ title: "Đã thêm danh mục mới" });
+                      } else {
+                        toast({ variant: "destructive", title: "Lỗi", description: "Không thể thêm danh mục" });
                       }
-                    }}
-                  >
-                    Thêm
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setShowCategoryInput(false);
-                      setNewCategory("");
-                    }}
-                  >
-                    Hủy
-                  </Button>
+                      setShowCategoryInput(false); setNewCategory("");
+                    }
+                  }}>Thêm</Button>
+                  <Button type="button" size="sm" variant="outline" onClick={() => { setShowCategoryInput(false); setNewCategory(""); }}>Hủy</Button>
                 </div>
               )}
             </div>
             <div className="space-y-2">
               <Label>Badge</Label>
-              <Select
-                value={formData.badge}
-                onValueChange={(value) => setFormData((prev) => ({ ...prev, badge: value }))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Chọn badge" />
-                </SelectTrigger>
+              <Select value={formData.badge} onValueChange={(value) => setFormData((prev) => ({ ...prev, badge: value }))}>
+                <SelectTrigger><SelectValue placeholder="Chọn badge" /></SelectTrigger>
                 <SelectContent>
                   {badges.map((badge) => (
-                    <SelectItem key={badge.value || "none"} value={badge.value || "none"}>
-                      {badge.label}
-                    </SelectItem>
+                    <SelectItem key={badge.value || "none"} value={badge.value || "none"}>{badge.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -634,144 +549,38 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="stock_quantity">Số lượng tồn kho *</Label>
-              <Input
-                id="stock_quantity"
-                type="number"
-                min="0"
-                value={formData.stock_quantity}
-                onChange={(e) => setFormData((prev) => ({ ...prev, stock_quantity: Number(e.target.value) }))}
-              />
-              {errors.stock_quantity && <p className="text-sm text-destructive">{errors.stock_quantity}</p>}
+              <Input id="stock_quantity" type="number" min="0" value={formData.stock_quantity} onChange={(e) => setFormData((prev) => ({ ...prev, stock_quantity: Number(e.target.value) }))} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="low_stock_threshold">Ngưỡng cảnh báo hết hàng</Label>
-              <Input
-                id="low_stock_threshold"
-                type="number"
-                min="0"
-                value={formData.low_stock_threshold}
-                onChange={(e) => setFormData((prev) => ({ ...prev, low_stock_threshold: Number(e.target.value) }))}
-              />
-              {errors.low_stock_threshold && <p className="text-sm text-destructive">{errors.low_stock_threshold}</p>}
+              <Input id="low_stock_threshold" type="number" min="0" value={formData.low_stock_threshold} onChange={(e) => setFormData((prev) => ({ ...prev, low_stock_threshold: Number(e.target.value) }))} />
             </div>
           </div>
 
           {/* Shipping Fee */}
           <div className="space-y-2">
             <Label htmlFor="shipping_fee">Phí vận chuyển (₫)</Label>
-            <Input
-              id="shipping_fee"
-              type="number"
-              min="0"
-              value={formData.shipping_fee || ""}
-              onChange={(e) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  shipping_fee: e.target.value ? Number(e.target.value) : null,
-                }))
-              }
-              placeholder="Để trống = dùng phí mặc định"
-            />
-            <p className="text-xs text-muted-foreground">
-              Để trống sẽ dùng phí vận chuyển mặc định từ cài đặt. Nhập giá trị để đặt phí riêng cho sản phẩm này.
-            </p>
+            <Input id="shipping_fee" type="number" min="0" value={formData.shipping_fee || ""} onChange={(e) => setFormData((prev) => ({ ...prev, shipping_fee: e.target.value ? Number(e.target.value) : null }))} placeholder="Để trống = dùng phí mặc định" />
           </div>
 
           {/* Free Shipping Threshold */}
           <div className="space-y-2">
             <Label htmlFor="free_shipping_threshold">Ngưỡng miễn phí vận chuyển (₫)</Label>
-            <Input
-              id="free_shipping_threshold"
-              type="number"
-              min="0"
-              value={formData.free_shipping_threshold || ""}
-              onChange={(e) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  free_shipping_threshold: e.target.value ? Number(e.target.value) : null,
-                }))
-              }
-              placeholder="Để trống = dùng ngưỡng mặc định"
-            />
-            <p className="text-xs text-muted-foreground">
-              Nếu tổng tiền sản phẩm này (giá × số lượng) {'>='} ngưỡng này, sản phẩm sẽ được miễn phí vận chuyển. Để trống sẽ dùng ngưỡng mặc định từ cài đặt.
-            </p>
+            <Input id="free_shipping_threshold" type="number" min="0" value={formData.free_shipping_threshold || ""} onChange={(e) => setFormData((prev) => ({ ...prev, free_shipping_threshold: e.target.value ? Number(e.target.value) : null }))} placeholder="Để trống = dùng ngưỡng mặc định" />
           </div>
 
           {/* Shipping Dimensions */}
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="weight">Cân nặng sau khi đóng gói (kg)</Label>
-              <Input
-                id="weight"
-                type="number"
-                min="0"
-                step="0.01"
-                value={formData.weight || ""}
-                onChange={(e) =>
-                  setFormData((prev) => ({
-                    ...prev,
-                    weight: e.target.value ? Number(e.target.value) : null,
-                  }))
-                }
-                placeholder="Ví dụ: 0.5"
-              />
+              <Input id="weight" type="number" min="0" step="0.01" value={formData.weight || ""} onChange={(e) => setFormData((prev) => ({ ...prev, weight: e.target.value ? Number(e.target.value) : null }))} />
             </div>
-
             <div className="space-y-2">
               <Label>Kích thước đóng gói (cm)</Label>
               <div className="grid grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="package_length" className="text-sm">Chiều dài</Label>
-                  <Input
-                    id="package_length"
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={formData.package_length || ""}
-                    onChange={(e) =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        package_length: e.target.value ? Number(e.target.value) : null,
-                      }))
-                    }
-                    placeholder="Dài"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="package_width" className="text-sm">Chiều rộng</Label>
-                  <Input
-                    id="package_width"
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={formData.package_width || ""}
-                    onChange={(e) =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        package_width: e.target.value ? Number(e.target.value) : null,
-                      }))
-                    }
-                    placeholder="Rộng"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="package_height" className="text-sm">Chiều cao</Label>
-                  <Input
-                    id="package_height"
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={formData.package_height || ""}
-                    onChange={(e) =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        package_height: e.target.value ? Number(e.target.value) : null,
-                      }))
-                    }
-                    placeholder="Cao"
-                  />
-                </div>
+                <div className="space-y-2"><Input id="package_length" type="number" min="0" step="0.1" value={formData.package_length || ""} onChange={(e) => setFormData((prev) => ({ ...prev, package_length: e.target.value ? Number(e.target.value) : null }))} placeholder="Dài" /></div>
+                <div className="space-y-2"><Input id="package_width" type="number" min="0" step="0.1" value={formData.package_width || ""} onChange={(e) => setFormData((prev) => ({ ...prev, package_width: e.target.value ? Number(e.target.value) : null }))} placeholder="Rộng" /></div>
+                <div className="space-y-2"><Input id="package_height" type="number" min="0" step="0.1" value={formData.package_height || ""} onChange={(e) => setFormData((prev) => ({ ...prev, package_height: e.target.value ? Number(e.target.value) : null }))} placeholder="Cao" /></div>
               </div>
             </div>
           </div>
@@ -779,39 +588,20 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
           {/* Switches */}
           <div className="flex items-center gap-8">
             <div className="flex items-center gap-2">
-              <Switch
-                id="has_gift"
-                checked={formData.has_gift}
-                onCheckedChange={(checked) => setFormData((prev) => ({ ...prev, has_gift: checked }))}
-              />
+              <Switch id="has_gift" checked={formData.has_gift} onCheckedChange={(checked) => setFormData((prev) => ({ ...prev, has_gift: checked }))} />
               <Label htmlFor="has_gift">Có quà tặng</Label>
             </div>
             <div className="flex items-center gap-2">
-              <Switch
-                id="is_active"
-                checked={formData.is_active}
-                onCheckedChange={(checked) => setFormData((prev) => ({ ...prev, is_active: checked }))}
-              />
+              <Switch id="is_active" checked={formData.is_active} onCheckedChange={(checked) => setFormData((prev) => ({ ...prev, is_active: checked }))} />
               <Label htmlFor="is_active">Hiển thị sản phẩm</Label>
             </div>
           </div>
 
           {/* Submit */}
           <div className="flex justify-end gap-3 pt-4">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Hủy
-            </Button>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Hủy</Button>
             <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Đang lưu...
-                </>
-              ) : product ? (
-                "Cập nhật"
-              ) : (
-                "Thêm sản phẩm"
-              )}
+              {isSubmitting ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Đang lưu...</> : product ? "Cập nhật" : "Thêm sản phẩm"}
             </Button>
           </div>
         </form>
