@@ -27,6 +27,12 @@ import {
   getMeta,
   resolveLineUnitBarcode,
 } from "@/lib/productCatalogMeta";
+import {
+  buildSkuUnitIndex,
+  getSkuUnitOptions,
+  resolveUnitOption,
+  type CatalogProductRow,
+} from "@/lib/catalogUnitBarcode";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -135,6 +141,11 @@ export default function PackingSummaryBoard({
     [sharedProducts, orderSlugs],
   );
 
+  const skuUnitIndex = useMemo(
+    () => buildSkuUnitIndex(sharedProducts as CatalogProductRow[]),
+    [sharedProducts],
+  );
+
   const branchCodes = useMemo(() => {
     const codes = new Set<string>();
     const codeToLabel = new Map<string, string>();
@@ -183,7 +194,19 @@ export default function PackingSummaryBoard({
       barcodeHint: string | null,
     ): SummaryRow => {
       const meta = getMeta(index || new Map(), slug);
-      const resolved = resolveLineUnitBarcode(meta, unitHint, barcodeHint);
+      let resolved = resolveLineUnitBarcode(meta, unitHint, barcodeHint);
+      if (!resolved.barcode && slug) {
+        const opts = getSkuUnitOptions(skuUnitIndex, slug);
+        const match = unitHint
+          ? resolveUnitOption(opts, unitHint) || opts[0]
+          : opts[0];
+        if (match?.barcode) {
+          resolved = {
+            unit: resolved.unit || match.unit || unitHint || null,
+            barcode: match.barcode,
+          };
+        }
+      }
       // Key tổng hợp = mã + ĐVT (không gộp chung mã khác đơn vị)
       const code = normalizeOrderCodeText(slug || name) || name;
       const unitPart = normalizeOrderCodeText(resolved.unit || unitHint || "") || "—";

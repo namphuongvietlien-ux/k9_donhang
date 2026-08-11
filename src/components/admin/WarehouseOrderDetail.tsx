@@ -199,14 +199,39 @@ export default function WarehouseOrderDetail({
 
   useEffect(() => {
     if (!order) return;
-    const initPack: Record<string, number> = {};
-    const initReq: Record<string, number> = {};
-    for (const it of order.order_items) {
-      initPack[it.id] = it.qty_packed ?? it.qty_requested ?? it.quantity;
-      initReq[it.id] = it.qty_requested ?? it.quantity;
-    }
-    setPacked(initPack);
-    setReqDraft(initReq);
+
+    setPacked((prev) => {
+      const next: Record<string, number> = {};
+      for (const it of order.order_items) {
+        const serverValue = it.qty_packed ?? it.qty_requested ?? it.quantity;
+        const currentValue = prev[it.id];
+        const resolvedValue =
+          currentValue != null && Number.isFinite(Number(currentValue))
+            ? Number(currentValue)
+            : serverValue;
+        next[it.id] = Number.isFinite(Number(resolvedValue))
+          ? Math.max(0, Number(resolvedValue))
+          : Number(serverValue ?? 0);
+      }
+      return next;
+    });
+
+    setReqDraft((prev) => {
+      const next: Record<string, number> = {};
+      for (const it of order.order_items) {
+        const serverValue = it.qty_requested ?? it.quantity;
+        const currentValue = prev[it.id];
+        const resolvedValue =
+          currentValue != null && Number.isFinite(Number(currentValue))
+            ? Number(currentValue)
+            : serverValue;
+        next[it.id] = Number.isFinite(Number(resolvedValue))
+          ? Math.max(0, Number(resolvedValue))
+          : Number(serverValue ?? 0);
+      }
+      return next;
+    });
+
     // Chỉ xóa draft ĐVT khi server đã khớp — tránh mất barcode vừa sync trước refetch
     setUnitDraft((d) => {
       if (!Object.keys(d).length) return d;
@@ -1342,7 +1367,12 @@ export default function WarehouseOrderDetail({
                           mismatch === "over" &&
                             "border-amber-400 text-amber-900",
                         )}
-                        value={packed[it.id] ?? 0}
+                        value={
+                          packed[it.id] ??
+                          it.qty_packed ??
+                          it.qty_requested ??
+                          it.quantity
+                        }
                         onValueChange={(v) =>
                           setPacked((p) => ({ ...p, [it.id]: v }))
                         }

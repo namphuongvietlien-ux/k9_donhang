@@ -141,11 +141,11 @@ async function ensureProducts(
   let updated = 0;
 
   const validLines = parsed.lines.filter((l) => !l.errorNote);
-  const slugs = [...new Set(validLines.map((l) => l.productSlug).filter(Boolean))];
+  const requestedCodes = [...new Set(validLines.map((l) => (l.productSlug || "").trim()).filter(Boolean))];
 
   // Load existing in chunks of 200 (.in limit)
-  for (let i = 0; i < slugs.length; i += 200) {
-    const slice = slugs.slice(i, i + 200);
+  for (let i = 0; i < requestedCodes.length; i += 200) {
+    const slice = requestedCodes.slice(i, i + 200);
     const { data: existing } = await supabase
       .from("products")
       .select("id, slug")
@@ -160,6 +160,7 @@ async function ensureProducts(
     name: string;
     unit: string;
     barcode: string | null;
+    price: number | null;
     parentSku: string | null;
     /** stockQ7: không ghi đè products.unit */
     skipUnitPatch?: boolean;
@@ -173,13 +174,15 @@ async function ensureProducts(
       name: string;
       unit: string;
       barcode: string | null;
+      price: number | null;
       parentSku: string;
     }
   >();
 
   for (const line of validLines) {
-    const key = normalizeOrderCodeText(line.productSlug);
-    const existingId = slugToId.get(key);
+    const rawCode = String(line.productSlug || "").trim();
+    const key = normalizeOrderCodeText(rawCode);
+    const existingId = slugToId.get(key) || slugToId.get(rawCode);
     if (existingId) {
       if (parsed.mode === "catalogFast") {
         toUpdate.push({
@@ -187,6 +190,7 @@ async function ensureProducts(
           name: line.tenHang,
           unit: line.dvt || "cái",
           barcode: line.maVach ? line.maVach : null,
+          price: line.price ?? null,
           parentSku: line.parentSku || null,
         });
       } else if (parsed.mode === "stockQ7") {
@@ -196,6 +200,7 @@ async function ensureProducts(
             name: line.tenHang || "",
             unit: line.dvt || "cái",
             barcode: line.maVach || null,
+            price: line.price ?? null,
             parentSku: null,
             skipUnitPatch: true,
             lineDvt: line.dvt || "",
@@ -205,11 +210,13 @@ async function ensureProducts(
       continue;
     }
     if (!toCreateMap.has(key)) {
+      const createSlug = rawCode || slugFromMaHang(line.maHang, line.tenHang);
       toCreateMap.set(key, {
-        slug: line.productSlug || slugFromMaHang(line.maHang, line.tenHang),
+        slug: createSlug,
         name: line.tenHang || line.maHang,
         unit: line.dvt || "cái",
         barcode: line.maVach || null,
+        price: line.price ?? null,
         parentSku: line.parentSku,
       });
     }
@@ -224,6 +231,7 @@ async function ensureProducts(
         if (u.name) patch.name = u.name;
         if (u.unit && !u.skipUnitPatch) patch.unit = u.unit;
         if (u.parentSku) patch.parent_sku = u.parentSku;
+        if (u.price != null) patch.price = u.price;
 
         if (u.barcode) {
           const { data: prod } = await supabase
@@ -272,7 +280,7 @@ async function ensureProducts(
     const payload = slice.map((c) => ({
       name: c.name,
       slug: c.slug,
-      price: 0,
+      price: c.price ?? 0,
       is_active: true,
       unit: c.unit,
       barcode: c.barcode,
@@ -297,7 +305,7 @@ async function ensureProducts(
           .insert({
             name: c.name,
             slug,
-            price: 0,
+            price: c.price ?? 0,
             is_active: true,
             unit: c.unit,
             barcode: c.barcode,

@@ -27,6 +27,7 @@ export interface CatalogStockLine {
   tenHang: string;
   dvt: string;
   parentSku: string;
+  price: number | null;
   tonKho: number | null;
   khoRaw: string;
   productSlug: string;
@@ -71,10 +72,40 @@ function findKhoColumn(headerRow: unknown[]): number {
   return best.score >= 70 ? best.idx : -1;
 }
 
+function findPriceColumn(headerRow: unknown[]): number {
+  if (!headerRow?.length) return -1;
+  let best = { idx: -1, score: 0 };
+  for (let c = 0; c < headerRow.length; c++) {
+    const norm = normalizeHeaderText(headerRow[c]);
+    if (!norm) continue;
+    let score = 0;
+    if (norm === "price" || norm === "gia" || norm === "giaban") {
+      score = 100;
+    } else if (norm.includes("price") || norm.includes("gia")) {
+      score = 90;
+    }
+    if (score > best.score) best = { idx: c, score };
+  }
+  return best.score >= 80 ? best.idx : -1;
+}
+
+function parsePriceValue(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  const cleaned = text
+    .replace(/[^0-9,.-]/g, "")
+    .replace(/\.(?=\d{3}(?:[.,]|$))/g, "")
+    .replace(/,/g, ".");
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
 export function slugFromMaHang(maHang: string, tenHang: string): string {
   const code = normalizeProductCode(maHang);
-  // Lưu mã hàng IN HOA như GAS (không chuyển URL-slug lowercase)
-  if (code) return normalizeOrderCodeText(code);
+  // Giữ nguyên mã hàng gốc từ Excel, chỉ trim và chuẩn hóa NFC; không ép dấu/biến thành slug URL.
+  if (code) return String(code).trim();
   return generateSlug(tenHang || "san-pham") || `sp-${Date.now()}`;
 }
 
@@ -92,6 +123,7 @@ export function parseCatalogStockMatrix(
   const headerIndex = findImportHeaderRowIndex(matrix, 15);
   const columns = mapImportHeaderColumns(matrix[headerIndex] || []);
   const khoCol = findKhoColumn(matrix[headerIndex] || []);
+  const priceCol = findPriceColumn(matrix[headerIndex] || []);
 
   if (columns.maHang < 0 && columns.maVach < 0) {
     throw new Error("Không tìm thấy cột Mã hàng / Mã vạch (như file nhập khẩu GAS).");
@@ -131,6 +163,7 @@ export function parseCatalogStockMatrix(
     const dvt = sanitizeImportDvt(cell(row, columns.dvt));
     const parentSku = normalizeProductCode(cell(row, columns.parentSku));
     const khoRaw = String(cell(row, khoCol) ?? "").trim();
+    const price = priceCol >= 0 ? parsePriceValue(cell(row, priceCol)) : null;
 
     const tonCol = columns.tonKho >= 0 ? columns.tonKho : columns.soLuong;
     let tonKho: number | null = null;
@@ -163,6 +196,7 @@ export function parseCatalogStockMatrix(
       tenHang: existing?.name || tenHang || sku,
       dvt: dvt || existing?.unit || "cái",
       parentSku,
+      price,
       tonKho,
       khoRaw,
       productSlug: slug,
