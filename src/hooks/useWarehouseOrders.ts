@@ -472,8 +472,8 @@ export function useWarehouseOrderMutations() {
    * Không await catalog — refetch ~hàng nghìn SP làm mutateAsync treo
    * (nút Thêm mã quay spinner mãi / tưởng không hoạt động).
    */
-  const invalidateOrders = () => {
-    void Promise.all([
+  const invalidateOrders = async () => {
+    await Promise.all([
       qc.invalidateQueries({ queryKey: ["warehouse-orders"] }),
       qc.invalidateQueries({ queryKey: ["warehouse-order"] }),
       qc.invalidateQueries({ queryKey: ["internal-transfers"] }),
@@ -482,16 +482,25 @@ export function useWarehouseOrderMutations() {
       qc.invalidateQueries({ queryKey: ["stock-on-hand"] }),
       qc.invalidateQueries({ queryKey: ["dashboard-stats"] }),
     ]);
+
+    await Promise.all([
+      qc.refetchQueries({ queryKey: ["warehouse-orders"], type: "active" }),
+      qc.refetchQueries({ queryKey: ["warehouse-order"], type: "active" }),
+      qc.refetchQueries({ queryKey: ["packing-orders"], type: "active" }),
+      qc.refetchQueries({ queryKey: ["week-orders"], type: "active" }),
+    ]);
   };
 
-  const invalidateCatalogSoft = () => {
-    void qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] });
-    void qc.invalidateQueries({ queryKey: ["products"] });
+  const invalidateCatalogSoft = async () => {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["catalog-for-stock-import"] }),
+      qc.invalidateQueries({ queryKey: ["products"] }),
+    ]);
   };
 
-  const invalidate = () => {
-    invalidateOrders();
-    invalidateCatalogSoft();
+  const invalidate = async () => {
+    await invalidateOrders();
+    await invalidateCatalogSoft();
   };
 
   /** GAS saveOrder — tạo phiếu pending + duplicate check ≤ 5 phút */
@@ -727,7 +736,9 @@ export function useWarehouseOrderMutations() {
 
       return { orderId: input.orderId, reverted: ord.status === "processing" };
     },
-    onSuccess: invalidate,
+    onSuccess: async () => {
+      await invalidate();
+    },
   });
 
   const updateItemQty = useMutation({
@@ -754,7 +765,9 @@ export function useWarehouseOrderMutations() {
         .eq("id", input.itemId);
       if (error) throw error;
     },
-    onSuccess: invalidate,
+    onSuccess: async () => {
+      await invalidate();
+    },
   });
 
   /**
@@ -828,7 +841,9 @@ export function useWarehouseOrderMutations() {
         }
       }
     },
-    onSuccess: invalidate,
+    onSuccess: async () => {
+      await invalidate();
+    },
   });
 
   const addItem = useMutation({
@@ -891,10 +906,10 @@ export function useWarehouseOrderMutations() {
         }
       }
     },
-    onSuccess: () => {
-      invalidateOrders();
+    onSuccess: async () => {
+      await invalidateOrders();
       // Mã ngoài vừa upsert → soft refresh catalog (không chặn UI)
-      invalidateCatalogSoft();
+      await invalidateCatalogSoft();
     },
   });
 
@@ -908,7 +923,9 @@ export function useWarehouseOrderMutations() {
         .eq("id", itemId);
       if (error) throw error;
     },
-    onSuccess: invalidate,
+    onSuccess: async () => {
+      await invalidate();
+    },
   });
 
   const cancelOrder = useMutation({
@@ -924,7 +941,9 @@ export function useWarehouseOrderMutations() {
         ...ctx,
       });
     },
-    onSuccess: invalidate,
+    onSuccess: async () => {
+      await invalidate();
+    },
   });
 
   /** Admin: khôi phục phiếu đã hủy → pending */
@@ -950,7 +969,9 @@ export function useWarehouseOrderMutations() {
         ...ctx,
       });
     },
-    onSuccess: invalidate,
+    onSuccess: async () => {
+      await invalidate();
+    },
   });
 
   /** Admin: sửa trạng thái tự do (GAS-like) */
@@ -1034,7 +1055,9 @@ export function useWarehouseOrderMutations() {
         extra: `${input.lines.length} dòng đã soạn`,
       });
     },
-    onSuccess: invalidate,
+    onSuccess: async () => {
+      await invalidate();
+    },
   });
 
   /** GAS confirmReceive + trừ stock_on_hand kho xuất theo qty_received */
@@ -1190,7 +1213,9 @@ export function useWarehouseOrderMutations() {
         extra: `Trừ tồn theo ${input.lines.length} dòng nhận`,
       });
     },
-    onSuccess: invalidate,
+    onSuccess: async () => {
+      await invalidate();
+    },
   });
 
   return {

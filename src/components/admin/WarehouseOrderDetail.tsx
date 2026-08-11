@@ -118,7 +118,7 @@ export default function WarehouseOrderDetail({
   onClose,
   variant = "manage",
 }: WarehouseOrderDetailProps) {
-  const { data: order, isLoading } = useWarehouseOrder(orderId);
+  const { data: order, isLoading, refetch } = useWarehouseOrder(orderId);
   const {
     updateItemQty,
     updateItemUnit,
@@ -651,16 +651,34 @@ export default function WarehouseOrderDetail({
 
   const handleSavePack = async () => {
     try {
-      await savePacking.mutateAsync({
-        orderId: order.id,
-        lines: order.order_items.map((it) => ({
+      const lines = order.order_items.map((it) => {
+        const rawPacked =
+          packed[it.id] ??
+          it.qty_packed ??
+          it.qty_requested ??
+          it.quantity;
+        const qtyPacked = Number.isFinite(Number(rawPacked))
+          ? Math.max(0, Number(rawPacked))
+          : Number(it.qty_requested ?? it.quantity ?? 0);
+
+        return {
           itemId: it.id,
-          qtyPacked: packed[it.id] ?? it.qty_requested ?? it.quantity,
+          qtyPacked,
           unit: lineUnit(it) || it.unit || null,
           barcode: lineBarcode(it) || it.barcode || null,
-        })),
+        };
       });
-      toast({ title: "Đã lưu soạn hàng", description: order.order_code || "" });
+
+      await savePacking.mutateAsync({
+        orderId: order.id,
+        lines,
+      });
+
+      await refetch();
+      toast({
+        title: "Đã lưu soạn hàng",
+        description: order.order_code || "",
+      });
     } catch (e) {
       toast({
         title: "Lỗi soạn hàng",
@@ -693,6 +711,7 @@ export default function WarehouseOrderDetail({
           qtyRequested: Math.max(0, Number(reqDraft[it.id]) || 0),
         });
       }
+      await refetch();
       void notifyWarehouseEvent({
         event: "order_changed",
         soPhieu: order.order_code || order.id,
