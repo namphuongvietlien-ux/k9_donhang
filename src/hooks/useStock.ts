@@ -490,10 +490,26 @@ export function useStock(warehouseId?: string | null, enabled = true) {
       slugOrIdOrBarcode: string | null | undefined,
       unit?: string | null,
     ): number | null => {
-      if (!slugOrIdOrBarcode || !normalizeUnitKey(unit)) return null;
+      if (!slugOrIdOrBarcode) return null;
       const key = stockCompositeKey(slugOrIdOrBarcode, unit);
-      const row = index.byComposite.get(key);
-      return row?.source === "stock_on_hand" ? row.quantity : null;
+      const exact = index.byComposite.get(key);
+      if (exact?.source === "stock_on_hand") return exact.quantity;
+
+      const bare = normalizeOrderCodeText(slugOrIdOrBarcode);
+      const rows = (index.byBare.get(bare) || []).filter(
+        (row) => row.source === "stock_on_hand",
+      );
+      if (!rows.length) return null;
+
+      const unitKey = normalizeUnitKey(unit);
+      const sameUnit = unitKey
+        ? rows.find((row) => row.unitKey === unitKey)
+        : null;
+      if (sameUnit) return sameUnit.quantity;
+
+      // Chỉ một dòng tồn của mã: khác nhãn ĐVT nhưng không có quy cách khác
+      // để nhầm lẫn, nên vẫn là tồn Q7 được xác thực.
+      return rows.length === 1 ? rows[0].quantity : null;
     },
     [index],
   );
