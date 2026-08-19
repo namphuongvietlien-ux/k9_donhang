@@ -71,6 +71,13 @@ const ACCOUNTS = [
   { username: "140nvc", password: "140nguyenvancu", role: "staff", wh: "Q1", name: "CN KD 05" },
   { username: "237ph", password: "237phamhung", role: "staff", wh: "PH", name: "CN KD 03" },
   { username: "Q7", password: "123456", role: "staff", wh: "Q7", name: "CN Q7" },
+  { username: "ql275hd", password: "ql275hd", role: "manager", wh: "Q4_275", name: "Quản lý CN KD 01 — Vĩnh Hội / 275" },
+  { username: "ql178hd", password: "ql178hd", role: "manager", wh: "Q4_178", name: "Quản lý CN KD 06 — 178 Hoàng Diệu" },
+  { username: "qlthd", password: "qlthdK9", role: "manager", wh: "Q5", name: "Quản lý CN KD 04" },
+  { username: "ql86dbt", password: "ql86dbt", role: "manager", wh: "Q8", name: "Quản lý CN KD 02" },
+  { username: "ql140nvc", password: "ql140nvc", role: "manager", wh: "Q1", name: "Quản lý CN KD 05" },
+  { username: "ql237ph", password: "ql237ph", role: "manager", wh: "PH", name: "Quản lý CN KD 03" },
+  { username: "qlq7", password: "qlq7k9", role: "manager", wh: "Q7", name: "Quản lý CN Q7" },
 ];
 
 async function main() {
@@ -149,6 +156,16 @@ async function main() {
       role: acc.role,
     });
     if (rErr) console.warn(`  role ${email}:`, rErr.message);
+
+    if (acc.role === "manager" && warehouseId) {
+      const { error: scopeErr } = await supabase
+        .from("branch_manager_scopes")
+        .upsert(
+          { manager_user_id: userId, warehouse_id: warehouseId },
+          { onConflict: "manager_user_id,warehouse_id" },
+        );
+      if (scopeErr) console.warn(`  scope ${email}:`, scopeErr.message);
+    }
 
     // Profile — bảng dùng user_id (không phải id = auth uid)
     const profilePayload = {

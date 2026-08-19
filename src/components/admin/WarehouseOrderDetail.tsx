@@ -2,12 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   FileSpreadsheet,
+  Lock,
   Loader2,
   Plus,
   Printer,
   RotateCcw,
   Save,
   Trash2,
+  Unlock,
 } from "lucide-react";
 import {
   useWarehouseOrder,
@@ -127,6 +129,7 @@ export default function WarehouseOrderDetail({
     cancelOrder,
     restoreOrder,
     setOrderStatus,
+    setOrderLock,
     savePacking,
   } = useWarehouseOrderMutations();
   const { role, username, user } = useAuth();
@@ -605,13 +608,42 @@ export default function WarehouseOrderDetail({
   }
 
   const locked = order.status === "completed" || order.status === "cancelled";
-  /** pending / processing — cho sửa ĐVT; completed / cancelled khóa cứng */
+  /** Admin vẫn sửa được đơn khóa; completed / cancelled mới khóa cứng. */
   const unitEditable = !locked;
 
   const lineUnit = (it: { id: string; unit?: string | null }) =>
     unitDraft[it.id]?.unit ?? it.unit ?? "";
   const lineBarcode = (it: { id: string; barcode?: string | null }) =>
     unitDraft[it.id]?.barcode ?? it.barcode ?? "";
+  const isItemStockShort = (it: typeof order.order_items[number]) => {
+    const requiredQty = Number(it.qty_requested ?? it.quantity) || 0;
+    const availableQty =
+      getQty(it.product_slug, lineUnit(it)) ??
+      getQty(lineBarcode(it), lineUnit(it)) ??
+      getQty(it.product_name, lineUnit(it));
+    return availableQty != null && availableQty < requiredQty;
+  };
+  const exportableOrderItems = order.order_items.filter(
+    (it) => !it.is_out_stock && !it.is_locked && !isItemStockShort(it),
+  );
+  const displayOrderItems = variant === "packing"
+    ? [...order.order_items].sort(
+      (left, right) => Number(isItemStockShort(left)) - Number(isItemStockShort(right)),
+    )
+    : order.order_items;
+  const hiddenPackingItemCount = order.order_items.filter(isItemStockShort).length;
+
+  const createPrintDetail = () => warehouseOrderToPrintDetail({
+    ...order,
+    order_items: exportableOrderItems.map((it) => ({
+      ...it,
+      qty_packed:
+        packed[it.id] ??
+        it.qty_packed ??
+        it.qty_requested ??
+        it.quantity,
+    })),
+  });
 
   const onLineUnitChange = async (
     it: {
@@ -792,6 +824,25 @@ export default function WarehouseOrderDetail({
     }
   };
 
+  const handleToggleOrderLock = async () => {
+    const isLocked = !order.is_locked;
+    const message = isLocked
+      ? `Khóa đơn ${order.order_code}? Khách sẽ nhận thông báo đơn không thể thay đổi và cần tạo đơn mới.`
+      : `Mở khóa đơn ${order.order_code}?`;
+    if (!confirm(message)) return;
+
+    try {
+      await setOrderLock.mutateAsync({ orderId: order.id, isLocked });
+      toast({ title: isLocked ? "Đã khóa đơn" : "Đã mở khóa đơn" });
+    } catch (e) {
+      toast({
+        title: isLocked ? "Không khóa được đơn" : "Không mở khóa được đơn",
+        description: e instanceof Error ? e.message : "Lỗi",
+        variant: "destructive",
+      });
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -838,18 +889,7 @@ export default function WarehouseOrderDetail({
             variant="secondary"
             size="sm"
             onClick={() => {
-              const d = warehouseOrderToPrintDetail({
-                ...order,
-                order_items: order.order_items.map((it) => ({
-                  ...it,
-                  qty_packed:
-                    packed[it.id] ??
-                    it.qty_packed ??
-                    it.qty_requested ??
-                    it.quantity,
-                })),
-              });
-              openOrderPdfWindow(d);
+              openOrderPdfWindow(createPrintDetail());
             }}
           >
             <Printer className="w-4 h-4 mr-1" />
@@ -859,18 +899,7 @@ export default function WarehouseOrderDetail({
             variant="outline"
             size="sm"
             onClick={() => {
-              const d = warehouseOrderToPrintDetail({
-                ...order,
-                order_items: order.order_items.map((it) => ({
-                  ...it,
-                  qty_packed:
-                    packed[it.id] ??
-                    it.qty_packed ??
-                    it.qty_requested ??
-                    it.quantity,
-                })),
-              });
-              printOrderViaIframe(d);
+              printOrderViaIframe(createPrintDetail());
             }}
           >
             In nhanh
@@ -879,24 +908,28 @@ export default function WarehouseOrderDetail({
             variant="outline"
             size="sm"
             onClick={() => {
-              const d = warehouseOrderToPrintDetail({
-                ...order,
-                order_items: order.order_items.map((it) => ({
-                  ...it,
-                  qty_packed:
-                    packed[it.id] ??
-                    it.qty_packed ??
-                    it.qty_requested ??
-                    it.quantity,
-                })),
-              });
-              exportOrderExcel(d);
+              exportOrderExcel(createPrintDetail());
               toast({ title: "Đã tải file Excel" });
             }}
           >
             <FileSpreadsheet className="w-4 h-4 mr-1" />
             Xuất Excel
           </Button>
+          {isAdmin && (
+            <Button
+              variant={order.is_locked ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => void handleToggleOrderLock()}
+              disabled={setOrderLock.isPending}
+            >
+              {order.is_locked ? (
+                <Unlock className="w-4 h-4 mr-1" />
+              ) : (
+                <Lock className="w-4 h-4 mr-1" />
+              )}
+              {order.is_locked ? "Mở khóa đơn" : "Khóa đặt hàng"}
+            </Button>
+          )}
           {isAdmin && (
             <Select
               value={order.status}
@@ -1154,7 +1187,12 @@ export default function WarehouseOrderDetail({
         </div>
       )}
 
-      <div className={excelTableWrap}>
+      <div className={cn(excelTableWrap, "max-h-[calc(96vh-18rem)] min-h-[22rem]")}>
+        {variant === "packing" && hiddenPackingItemCount > 0 ? (
+          <div className="sticky top-0 z-20 border-b border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800">
+            {hiddenPackingItemCount} mã thiếu tồn đã được đưa xuống cuối danh sách và không xuất ra phiếu.
+          </div>
+        ) : null}
         <Table stickyHeader>
           <TableHeader>
             <TableRow>
@@ -1181,7 +1219,7 @@ export default function WarehouseOrderDetail({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {order.order_items.map((it, idx) => {
+            {displayOrderItems.map((it, idx) => {
               const soft = it.line_notes || "";
               const loi = hasLoiNote(soft) || hasLoiNote(order.notes);
               const req = it.qty_requested ?? it.quantity;
@@ -1197,6 +1235,7 @@ export default function WarehouseOrderDetail({
                 getQty(it.product_slug, displayUnit) ??
                 getQty(displayBarcode, displayUnit) ??
                 getQty(it.product_name, displayUnit);
+              const stockShort = isItemStockShort(it);
               return (
                 <TableRow
                   key={it.id}
@@ -1206,6 +1245,7 @@ export default function WarehouseOrderDetail({
                     !mismatch && soft && "bg-amber-50/70",
                     it.is_out_stock && "opacity-60",
                     it.is_locked && "opacity-75",
+                    stockShort && "bg-red-50/80 opacity-60",
                   )}
                 >
                   <TableCell
@@ -1235,6 +1275,12 @@ export default function WarehouseOrderDetail({
                       >
                         <AlertTriangle className="w-3 h-3 shrink-0" />
                         {QTY_MISMATCH_HINT[mismatch]}
+                      </div>
+                    ) : null}
+                    {stockShort ? (
+                      <div className="mt-0.5 flex items-center gap-1 text-[10px] font-bold text-red-700">
+                        <AlertTriangle className="w-3 h-3 shrink-0" />
+                        Thiếu tồn - không xuất
                       </div>
                     ) : null}
                     {soft ? (
@@ -1363,6 +1409,7 @@ export default function WarehouseOrderDetail({
                       <QtyInput
                         className={cn(
                           "w-16 ml-auto",
+                          stockShort && "border-red-400 bg-red-100 text-red-800",
                           mismatch === "short" && "border-red-400 text-red-800",
                           mismatch === "over" &&
                             "border-amber-400 text-amber-900",
@@ -1376,6 +1423,7 @@ export default function WarehouseOrderDetail({
                         onValueChange={(v) =>
                           setPacked((p) => ({ ...p, [it.id]: v }))
                         }
+                        disabled={stockShort}
                       />
                     )}
                   </TableCell>

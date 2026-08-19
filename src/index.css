@@ -218,3 +218,131 @@ All colors MUST be HSL.
 .admin-sidebar-nav::-webkit-scrollbar-thumb:hover {
   background-color: rgb(148 163 184);
 }
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 14mm 13mm;
+  }
+
+  body:has(.internal-weekly-print) * {
+    visibility: hidden !important;
+  }
+
+  body:has(.internal-weekly-print) .internal-weekly-print,
+  body:has(.internal-weekly-print) .internal-weekly-print * {
+    visibility: visible !important;
+  }
+
+  .internal-weekly-print {
+    display: block !important;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    color: #111827;
+    font-family: "Times New Roman", serif;
+    font-size: 11pt;
+    line-height: 1.35;
+  }
+
+  .internal-weekly-print__header {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    border-bottom: 2px solid #111827;
+    padding-bottom: 12px;
+    margin-bottom: 18px;
+  }
+
+  .internal-weekly-print__eyebrow {
+    margin: 0 0 8px;
+    font-family: "Work Sans", sans-serif;
+    font-size: 8.5pt;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+
+  .internal-weekly-print h1 {
+    margin: 0;
+    font-size: 18pt;
+    line-height: 1.15;
+  }
+
+  .internal-weekly-print__subtitle {
+    margin: 6px 0 0;
+    font-style: italic;
+  }
+
+  .internal-weekly-print__meta {
+    min-width: 180px;
+    font-size: 10pt;
+  }
+
+  .internal-weekly-print__meta p {
+    margin: 0 0 5px;
+  }
+
+  .internal-weekly-print__table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  .internal-weekly-print__table th,
+  .internal-weekly-print__table td {
+    border: 1px solid #374151;
+    padding: 7px 8px;
+    vertical-align: middle;
+  }
+
+  .internal-weekly-print__table th {
+    background: #e5e7eb !important;
+    font-family: "Work Sans", sans-serif;
+    font-size: 9pt;
+    text-align: center;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .internal-weekly-print__table th:nth-child(1) { width: 8%; }
+  .internal-weekly-print__table th:nth-child(2) { width: 18%; }
+  .internal-weekly-print__table th:nth-child(3) { width: 45%; }
+  .internal-weekly-print__table th:nth-child(4) { width: 12%; }
+  .internal-weekly-print__table th:nth-child(5) { width: 17%; }
+  .internal-weekly-print__table td:first-child,
+  .internal-weekly-print__table td:nth-child(4),
+  .internal-weekly-print__quantity {
+    text-align: center;
+  }
+
+  .internal-weekly-print__code {
+    font-family: "Courier New", monospace;
+    font-size: 9.5pt;
+  }
+
+  .internal-weekly-print__table tfoot td {
+    background: #f3f4f6 !important;
+    font-weight: 700;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .internal-weekly-print__signatures {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    margin-top: 42px;
+    text-align: center;
+  }
+
+  .internal-weekly-print__signatures strong,
+  .internal-weekly-print__signatures span {
+    display: block;
+  }
+
+  .internal-weekly-print__signatures span {
+    margin-top: 4px;
+    font-size: 9pt;
+    font-style: italic;
+  }
+}

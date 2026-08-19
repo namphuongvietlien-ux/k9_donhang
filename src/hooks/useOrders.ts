@@ -20,6 +20,7 @@ export interface PackingOrderItem {
   product_slug: string | null;
   quantity: number;
   qty_requested?: number | null;
+  qty_packed?: number | null;
   price: number;
   unit?: string | null;
   barcode?: string | null;
@@ -76,7 +77,7 @@ async function fetchPackingOrders(params: {
       id, order_code, customer_name, status, created_at,
       warehouse_id, source_warehouse_id, packing_date, packing_shift, duplicate_accepted,
       warehouse:warehouse_id ( id, code, name, short_name, print_name ),
-      order_items ( id, product_name, product_slug, quantity, qty_requested, price, unit, barcode )
+      order_items ( id, product_name, product_slug, quantity, qty_requested, qty_packed, price, unit, barcode )
     `,
     )
     .gte("created_at", new Date(win.startMs).toISOString())
@@ -92,7 +93,7 @@ async function fetchPackingOrders(params: {
   }
 
   const { data, error } = await query;
-  if (error && /short_name|print_name|barcode|unit|qty_requested/i.test(error.message || "")) {
+  if (error && /short_name|print_name|barcode|unit|qty_requested|qty_packed/i.test(error.message || "")) {
     let q2 = supabase
       .from("orders")
       .select(

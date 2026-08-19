@@ -40,6 +40,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/hooks/usePermissions";
 import { AdminRoute } from "@/components/admin/AdminRoute";
+import { useWarehouses, warehouseLabel } from "@/hooks/useWarehouses";
 
 interface User {
   id: string;
@@ -81,11 +82,13 @@ const AdminUsers = () => {
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserFullName, setNewUserFullName] = useState("");
   const [newUserRole, setNewUserRole] = useState<'super_admin' | 'manager' | 'staff'>('staff');
+  const [newUserWarehouseId, setNewUserWarehouseId] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [isAssigning, setIsAssigning] = useState(false);
   const { toast } = useToast();
   const { hasPermission } = usePermissions();
   const { session } = useAuth();
+  const { warehouses } = useWarehouses();
   const canManageUsers = hasPermission('users.manage');
 
   useEffect(() => {
@@ -150,6 +153,14 @@ const AdminUsers = () => {
       });
       return;
     }
+    if (newUserRole !== 'super_admin' && !newUserWarehouseId) {
+      toast({
+        variant: "destructive",
+        title: "Thiếu chi nhánh",
+        description: "Chọn chi nhánh phụ trách cho quản lý hoặc nhân viên.",
+      });
+      return;
+    }
 
     setIsCreating(true);
     try {
@@ -184,6 +195,7 @@ const AdminUsers = () => {
           password: newUserPassword,
           full_name: newUserFullName || undefined,
           role: newUserRole,
+          warehouse_id: newUserRole === 'super_admin' ? undefined : newUserWarehouseId,
         }),
       });
 
@@ -231,6 +243,7 @@ const AdminUsers = () => {
       setNewUserPassword("");
       setNewUserFullName("");
       setNewUserRole('staff');
+      setNewUserWarehouseId("");
       fetchUsers();
     } catch (error: any) {
       const errorMessage = error.message || error.error || "Không thể tạo user";
@@ -540,7 +553,10 @@ const AdminUsers = () => {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="role">Quyền</Label>
-                <Select value={newUserRole} onValueChange={(value: any) => setNewUserRole(value)}>
+                <Select value={newUserRole} onValueChange={(value: any) => {
+                  setNewUserRole(value);
+                  if (value === 'super_admin') setNewUserWarehouseId("");
+                }}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -553,6 +569,26 @@ const AdminUsers = () => {
                   </SelectContent>
                 </Select>
               </div>
+              {newUserRole !== 'super_admin' ? (
+                <div className="space-y-2">
+                  <Label htmlFor="warehouse">Chi nhánh phụ trách</Label>
+                  <Select value={newUserWarehouseId} onValueChange={setNewUserWarehouseId}>
+                    <SelectTrigger id="warehouse">
+                      <SelectValue placeholder="Chọn chi nhánh" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {warehouses.map((warehouse) => (
+                        <SelectItem key={warehouse.id} value={warehouse.id}>
+                          {warehouseLabel(warehouse)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Quản lý được duyệt đơn xuất nội bộ của chi nhánh này.
+                  </p>
+                </div>
+              ) : null}
             <DialogFooter className="px-0">
               <Button type="button" variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
                 Hủy

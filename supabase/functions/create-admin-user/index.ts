@@ -14,6 +14,7 @@ interface RequestBody {
   password: string;
   full_name?: string;
   role: 'super_admin' | 'manager' | 'staff';
+  warehouse_id?: string;
 }
 
 serve(async (req) => {
@@ -135,7 +136,7 @@ serve(async (req) => {
 
     // Parse request body
     const body = await req.json();
-    const { email, password, full_name, role }: RequestBody = body;
+    const { email, password, full_name, role, warehouse_id }: RequestBody = body;
     
     // #region agent log
     console.log(JSON.stringify({location:'create-admin-user:111',message:'Request body parsed',data:{hasEmail:!!email,hasPassword:!!password,hasRole:!!role,role:role||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'}));
@@ -169,6 +170,17 @@ serve(async (req) => {
       );
     }
 
+    const warehouseId = String(warehouse_id || "").trim() || null;
+    if (role !== "super_admin" && !warehouseId) {
+      return new Response(
+        JSON.stringify({ error: "Chọn chi nhánh phụ trách cho quản lý hoặc nhân viên" }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+
     // Validate password strength
     if (password.length < 6) {
       // #region agent log
@@ -191,6 +203,22 @@ serve(async (req) => {
       },
     });
 
+    let warehouse: { id: string; code: string; name: string } | null = null;
+    if (warehouseId) {
+      const { data, error } = await supabaseAdmin
+        .from("warehouses")
+        .select("id, code, name")
+        .eq("id", warehouseId)
+        .maybeSingle();
+      if (error || !data) {
+        return new Response(JSON.stringify({ error: "Chi nhánh không hợp lệ" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      warehouse = data;
+    }
+
     // Create user in auth.users
     const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
       email: email.toLowerCase().trim(),
@@ -198,6 +226,8 @@ serve(async (req) => {
       email_confirm: true, // Auto-confirm email for admin-created users
       user_metadata: {
         full_name: full_name || "",
+        warehouse_id: warehouse?.id || null,
+        warehouse_code: warehouse?.code || null,
       },
     });
 
@@ -258,6 +288,38 @@ serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         }
       );
+    }
+
+    const { error: profileError } = await supabaseAdmin.from("profiles").upsert(
+      {
+        user_id: newUser.user.id,
+        full_name: full_name || "",
+        warehouse_id: warehouse?.id || null,
+      },
+      { onConflict: "user_id" },
+    );
+    if (profileError) {
+      await supabaseAdmin.auth.admin.deleteUser(newUser.user.id);
+      return new Response(JSON.stringify({ error: "Failed to assign branch", details: profileError.message }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (role === "manager" && warehouse) {
+      const { error: scopeError } = await supabaseAdmin
+        .from("branch_manager_scopes")
+        .upsert(
+          { manager_user_id: newUser.user.id, warehouse_id: warehouse.id },
+          { onConflict: "manager_user_id,warehouse_id" },
+        );
+      if (scopeError) {
+        await supabaseAdmin.auth.admin.deleteUser(newUser.user.id);
+        return new Response(JSON.stringify({ error: "Failed to assign manager scope", details: scopeError.message }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     // Return success response

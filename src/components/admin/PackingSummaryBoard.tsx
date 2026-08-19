@@ -11,6 +11,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { useWarehouses, warehouseLabel } from "@/hooks/useWarehouses";
 import { useProducts } from "@/hooks/useProducts";
 import { warehouseShortLabel } from "@/lib/warehouseMeta";
@@ -259,7 +260,7 @@ export default function PackingSummaryBoard({
     for (const order of orders) {
       const branch = order.warehouse?.code || "—";
       for (const it of order.order_items || []) {
-        const qty = Number(it.qty_requested ?? it.quantity) || 0;
+        const qty = Number(it.qty_packed ?? it.qty_requested ?? it.quantity) || 0;
         if (qty <= 0) continue;
         const row = ensure(
           it.product_slug,
@@ -337,6 +338,54 @@ export default function PackingSummaryBoard({
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "TongHopSoan");
     XLSX.writeFile(wb, `tong-hop-soan_${packingDate}_${mode}.xlsx`);
+  };
+
+  const exportTransferImport = async () => {
+    try {
+      const response = await fetch("/nhap_khau_phieu_lenh_dieu_chuyen.xlsx");
+      if (!response.ok) throw new Error("Không tải được file mẫu lệnh điều chuyển.");
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(await response.arrayBuffer());
+      const sheetName = "Nhập khẩu hàng hóa lệnh";
+      const worksheet = workbook.getWorksheet(sheetName);
+      if (!worksheet) throw new Error("Không tìm thấy sheet Nhập khẩu hàng hóa lệnh trong file mẫu.");
+
+      const templateRow = worksheet.getRow(6);
+      for (let rowNumber = 6; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+        for (const column of [1, 6, 8, 9]) {
+          worksheet.getRow(rowNumber).getCell(column).value = null;
+        }
+      }
+
+      rows.forEach((row, index) => {
+        const excelRow = index + 6;
+        const targetRow = worksheet.getRow(excelRow);
+        if (excelRow > 6) {
+          targetRow.height = templateRow.height;
+          for (let column = 1; column <= worksheet.columnCount; column += 1) {
+            targetRow.getCell(column).style = { ...templateRow.getCell(column).style };
+          }
+        }
+        targetRow.getCell(1).value = row.productSlug || row.productName;
+        targetRow.getCell(6).value = "KHODDKD0007 | Kho Địa điểm kinh doanh Q7";
+        targetRow.getCell(8).value = row.unit || "";
+        targetRow.getCell(9).value = Number(row.orderedQty) || 0;
+        targetRow.commit();
+      });
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = `nhap-khau-lenh-dieu-chuyen_Q7_${packingDate}_${mode}.xlsx`;
+      anchor.click();
+      URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Không thể xuất file lệnh điều chuyển.");
+    }
   };
 
   const printBoard = () => {
@@ -448,6 +497,15 @@ export default function PackingSummaryBoard({
             >
               <Download className="h-4 w-4 mr-1" />
               Xuất Excel
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void exportTransferImport()}
+              disabled={!rows.length}
+            >
+              <Download className="h-4 w-4 mr-1" />
+              Xuất lệnh điều chuyển
             </Button>
             <Button
               variant="outline"

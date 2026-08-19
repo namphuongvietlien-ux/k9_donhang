@@ -48,3 +48,18 @@ entrypoint = "./functions/create-admin-user/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/notify-telegram/index.ts"
+
+[functions.telegram-register]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/telegram-register/index.ts"
+
+[functions.telegram-webhook]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/telegram-webhook/index.ts"
+
+[functions.telegram-weekly-reminder]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/telegram-weekly-reminder/index.ts"

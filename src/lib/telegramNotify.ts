@@ -106,6 +106,32 @@ export async function notifyTelegram(text: string): Promise<void> {
   }
 }
 
+/** Kênh nghiệp vụ nội bộ, tách hoàn toàn khỏi nhóm đơn khách lẻ. */
+export async function notifyInternalDispatchTelegram(
+  text: string,
+  options?: {
+    warehouseId?: string;
+    recipientUserIds?: string[];
+    internalDispatchId?: string;
+  },
+): Promise<void> {
+  const msg = String(text || "").trim();
+  if (!msg) return;
+  try {
+    await supabase.functions.invoke("notify-telegram", {
+      body: {
+        text: msg,
+        channel: "internal",
+        internalWarehouseId: options?.warehouseId,
+        recipientUserIds: options?.recipientUserIds,
+        internalDispatchId: options?.internalDispatchId,
+      },
+    });
+  } catch {
+    /* Telegram không được phép chặn nghiệp vụ kho */
+  }
+}
+
 export async function notifyWarehouseEvent(input: {
   event: TelegramEvent;
   soPhieu: string;

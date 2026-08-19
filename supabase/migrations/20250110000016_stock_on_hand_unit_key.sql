@@ -109,6 +109,7 @@ BEGIN
     UNIQUE (warehouse_id, product_id, unit_key);
 EXCEPTION
   WHEN duplicate_object THEN NULL;
+  WHEN duplicate_table THEN NULL;
   WHEN unique_violation THEN
     RAISE NOTICE 'Có dòng trùng (warehouse, product, unit_key) — kiểm tra lại dữ liệu';
     RAISE;
