@@ -31,7 +31,7 @@ const AdminPackingCalendar = () => {
       </div>
 
       <Dialog open={!!detailId} onOpenChange={(o) => !o && setDetailId(null)}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-[1600px] max-h-[calc(100vh-1rem)] overflow-y-auto p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle>Soạn hàng / chi tiết phiếu</DialogTitle>
           </DialogHeader>

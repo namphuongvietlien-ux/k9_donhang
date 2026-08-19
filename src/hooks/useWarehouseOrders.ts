@@ -24,6 +24,7 @@ export { warehouseShortLabel };
 
 export interface WarehouseOrderItem {
   id: string;
+  stt?: number | null;
   product_name: string;
   product_slug: string | null;
   price: number;
@@ -43,6 +44,8 @@ export interface WarehouseOrderItem {
 export interface WarehouseOrder {
   id: string;
   order_code: string | null;
+  is_locked: boolean;
+  locked_at: string | null;
   order_kind: OrderKind;
   customer_name: string;
   status: string;
@@ -86,11 +89,11 @@ export interface WarehouseOrderFilters {
 }
 
 const ITEM_SELECT =
-  "id, product_name, product_slug, price, quantity, qty_requested, qty_packed, qty_received, line_notes, barcode, unit";
+  "id, stt, product_name, product_slug, price, quantity, qty_requested, qty_packed, qty_received, line_notes, barcode, unit";
 
 /** Cơ bản + nhãn Q4 Cũ/Mới — luôn lấy short_name để UI không hiện Q4_275 */
 const ORDER_SELECT = `
-  id, order_code, order_kind, customer_name, status, created_at, updated_at, notes,
+  id, order_code, is_locked, locked_at, order_kind, customer_name, status, created_at, updated_at, notes,
   warehouse_id, source_warehouse_id, packing_date, packing_shift, total_amount,
   source_warehouse:source_warehouse_id ( id, code, name, short_name, print_name, address ),
   warehouse:warehouse_id ( id, code, name, short_name, print_name, address ),
@@ -98,7 +101,7 @@ const ORDER_SELECT = `
 `;
 
 const ORDER_SELECT_BASIC = `
-  id, order_code, order_kind, customer_name, status, created_at, updated_at, notes,
+  id, order_code, is_locked, locked_at, order_kind, customer_name, status, created_at, updated_at, notes,
   warehouse_id, source_warehouse_id, packing_date, packing_shift, total_amount,
   source_warehouse:source_warehouse_id ( id, code, name ),
   warehouse:warehouse_id ( id, code, name ),
@@ -181,18 +184,30 @@ function attachProductFlags(
   });
 }
 
+function sortOrderItemsByStt<T extends { stt?: number | null }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const aStt = Number(a.stt ?? Number.MAX_SAFE_INTEGER);
+    const bStt = Number(b.stt ?? Number.MAX_SAFE_INTEGER);
+    return aStt - bStt;
+  });
+}
+
 function mapOrder(row: Record<string, unknown>): WarehouseOrder {
-  const items = ((row.order_items as WarehouseOrderItem[]) || []).map((it) => ({
-    ...it,
-    qty_requested: it.qty_requested ?? it.quantity,
-    qty_packed: it.qty_packed ?? null,
-    qty_received: it.qty_received ?? null,
-    line_notes: it.line_notes ?? null,
-  }));
+  const items = sortOrderItemsByStt(
+    ((row.order_items as WarehouseOrderItem[]) || []).map((it) => ({
+      ...it,
+      qty_requested: it.qty_requested ?? it.quantity,
+      qty_packed: it.qty_packed ?? null,
+      qty_received: it.qty_received ?? null,
+      line_notes: it.line_notes ?? null,
+    })),
+  );
   const code = (row.order_code as string) || null;
   return {
     id: row.id as string,
     order_code: code,
+    is_locked: !!row.is_locked,
+    locked_at: (row.locked_at as string) || null,
     order_kind: (row.order_kind as OrderKind) || inferOrderKind(code),
     customer_name: (row.customer_name as string) || "",
     status: (row.status as string) || "pending",
@@ -277,6 +292,19 @@ async function getOrderIdForItem(itemId: string): Promise<string> {
     .single();
   if (error) throw error;
   return (data as { order_id: string }).order_id;
+}
+
+async function getNextOrderItemStt(orderId: string): Promise<number> {
+  const { data, error } = await supabase
+    .from("order_items")
+    .select("stt")
+    .eq("order_id", orderId)
+    .order("stt", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return Number((data as { stt?: number | null } | null)?.stt ?? 0) + 1;
 }
 
 async function loadOrderTelegramCtx(orderId: string) {
@@ -599,11 +627,13 @@ export function useWarehouseOrderMutations() {
       }
 
       const orderId = (order as { id: string }).id;
-      const items = valid.map((l) => {
+      const nextStt = await getNextOrderItemStt(orderId);
+      const items = valid.map((l, index) => {
         const slug = normalizeOrderCodeText(l.productSlug || "");
         const pid = productIds.get(slug) || l.productId || null;
         return {
           order_id: orderId,
+          stt: nextStt + index,
           product_name: l.productName,
           product_slug: l.productSlug,
           product_image: null,
@@ -719,8 +749,10 @@ export function useWarehouseOrderMutations() {
               .eq("id", line.itemId);
             if (error) throw error;
           } else if (line.qtyRequested > 0) {
+            const nextStt = await getNextOrderItemStt(input.orderId);
             const { error } = await supabase.from("order_items").insert({
               order_id: input.orderId,
+              stt: nextStt,
               product_name: line.productName,
               product_slug: line.productSlug,
               quantity: line.qtyRequested,
@@ -876,8 +908,10 @@ export function useWarehouseOrderMutations() {
       ]);
       const pid = productIds.get(slug) || input.productId || null;
 
+      const nextStt = await getNextOrderItemStt(input.orderId);
       const row: Record<string, unknown> = {
         order_id: input.orderId,
+        stt: nextStt,
         product_name: name,
         product_slug: slug,
         price: input.price || 0,
@@ -1000,6 +1034,20 @@ export function useWarehouseOrderMutations() {
         ...ctx,
         extra: `TT → ${input.status}`,
       });
+    },
+    onSuccess: invalidate,
+  });
+
+  const setOrderLock = useMutation({
+    mutationFn: async (input: { orderId: string; isLocked: boolean }) => {
+      const { error } = await supabase
+        .from("orders")
+        .update({
+          is_locked: input.isLocked,
+          locked_at: input.isLocked ? new Date().toISOString() : null,
+        } as never)
+        .eq("id", input.orderId);
+      if (error) throw error;
     },
     onSuccess: invalidate,
   });
@@ -1234,5 +1282,6 @@ export function useWarehouseOrderMutations() {
     cancelOrder,
     restoreOrder,
     setOrderStatus,
+    setOrderLock,
   };
 }

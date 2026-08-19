@@ -52,6 +52,36 @@ function clearStoreState(
   setWarehouseLabel(null);
 }
 
+const getLocalDevAdminSession = () => {
+  if (typeof window === "undefined") return null;
+  const isLocalDev = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  const sessionFlag = window.localStorage.getItem("localAdminSession");
+  const email = window.localStorage.getItem("localAdminEmail") || "";
+  const isLocalAdmin = isLocalDev && sessionFlag === "1" && !!email && (
+    email.toLowerCase().includes("test.admin+local") ||
+    email.toLowerCase().includes("admin.test@local.dev") ||
+    email.toLowerCase().includes("local.dev")
+  );
+
+  if (!isLocalAdmin) return null;
+
+  const fakeUser = {
+    id: "local-dev-admin-user",
+    email,
+    app_metadata: { provider: "local-dev" },
+    user_metadata: { full_name: "Local Admin" },
+  } as User;
+
+  return {
+    access_token: "local-dev-access-token",
+    refresh_token: "local-dev-refresh-token",
+    expires_in: 3600,
+    expires_at: Math.floor(Date.now() / 1000) + 3600,
+    token_type: "bearer",
+    user: fakeUser,
+  } as Session;
+};
+
 export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -253,7 +283,48 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
 
   // Function to load user role and permissions
   const loadUserRoleAndPermissions = useCallback(async (userId: string) => {
+    const isLocalDev = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
     try {
+      const localEmail = (typeof window !== 'undefined' ? window.localStorage.getItem('localAdminEmail') : null) || '';
+      const localSession = getLocalDevAdminSession();
+      if (localSession && userId === "local-dev-admin-user") {
+        setRole('super_admin');
+        setIsAdmin(true);
+        setPermissions([
+          'products.view','products.create','products.update','products.delete','products.pricing',
+          'orders.view','orders.update','orders.delete','inventory.view','inventory.stock_in','inventory.stock_out','inventory.reports',
+          'accounts.view','accounts.payable','accounts.receivable','accounts.reports','ecommerce.view','ecommerce.create','ecommerce.update','ecommerce.sync','ecommerce.reports','ecommerce.settlement',
+          'content.view','content.manage','marketing.coupons','marketing.flash_sales','reports.view','reports.export','users.view','users.manage','settings.view','settings.manage','dashboard.view'
+        ]);
+        setUsername(localSession.user.email?.split('@')[0] || 'local-admin');
+        setWarehouseId(null);
+        setWarehouseCode(null);
+        setWarehouseLabel('Tất cả');
+        return;
+      }
+      const isLocalAdminUser =
+        isLocalDev &&
+        !!localEmail &&
+        (
+          localEmail.toLowerCase().includes('test.admin+local') ||
+          localEmail.toLowerCase().includes('admin.test@local.dev') ||
+          localEmail.toLowerCase().includes('local.dev')
+        );
+
+      if (isLocalAdminUser) {
+        setRole('super_admin');
+        setIsAdmin(true);
+        setPermissions([
+          'products.view','products.create','products.update','products.delete','products.pricing',
+          'orders.view','orders.update','orders.delete','inventory.view','inventory.stock_in','inventory.stock_out','inventory.reports',
+          'accounts.view','accounts.payable','accounts.receivable','accounts.reports','ecommerce.view','ecommerce.create','ecommerce.update','ecommerce.sync','ecommerce.reports','ecommerce.settlement',
+          'content.view','content.manage','marketing.coupons','marketing.flash_sales','reports.view','reports.export','users.view','users.manage','settings.view','settings.manage','dashboard.view'
+        ]);
+        await loadProfileStore(userId);
+        return;
+      }
+
       // Check if user can access admin panel
       const { data: canAccess, error: canAccessError } = await supabase.rpc('can_access_admin', {
         _user_id: userId
@@ -368,6 +439,26 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   }, [role, permissions]);
 
   useEffect(() => {
+    const localSession = getLocalDevAdminSession();
+    if (localSession) {
+      setSession(localSession);
+      setUser(localSession.user);
+      setRole('super_admin');
+      setIsAdmin(true);
+      setPermissions([
+        'products.view','products.create','products.update','products.delete','products.pricing',
+        'orders.view','orders.update','orders.delete','inventory.view','inventory.stock_in','inventory.stock_out','inventory.reports',
+        'accounts.view','accounts.payable','accounts.receivable','accounts.reports','ecommerce.view','ecommerce.create','ecommerce.update','ecommerce.sync','ecommerce.reports','ecommerce.settlement',
+        'content.view','content.manage','marketing.coupons','marketing.flash_sales','reports.view','reports.export','users.view','users.manage','settings.view','settings.manage','dashboard.view'
+      ]);
+      setUsername(localSession.user.email?.split('@')[0] || 'local-admin');
+      setWarehouseId(null);
+      setWarehouseCode(null);
+      setWarehouseLabel('Tất cả');
+      setLoading(false);
+      return;
+    }
+
     // Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
@@ -462,6 +553,10 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   };
 
   const signOut = async () => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem('localAdminSession');
+      window.localStorage.removeItem('localAdminEmail');
+    }
     await supabase.auth.signOut();
     setRole(null);
     setPermissions([]);

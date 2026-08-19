@@ -27,6 +27,7 @@ import BanKemDvPanel from "@/components/admin/BanKemDvPanel";
 import DuplicateAlertBanner from "@/components/admin/DuplicateAlertBanner";
 import TransferExcelImport from "@/components/admin/TransferExcelImport";
 import InternalTransferBoard from "@/components/admin/InternalTransferBoard";
+import InternalDispatchWorkspace from "@/components/admin/InternalDispatchWorkspace";
 import WarehouseOrderDetail from "@/components/admin/WarehouseOrderDetail";
 import DataImport from "@/components/admin/DataImport";
 import {
@@ -69,6 +70,7 @@ type AppTab =
   | "manage"
   | "receive"
   | "packing"
+  | "internal-dispatch"
   | "xb"
   | "admin";
 
@@ -79,6 +81,7 @@ const NAV: { id: AppTab; label: string; icon: typeof PenLine }[] = [
   { id: "manage", label: "Quản Lý", icon: ClipboardList },
   { id: "receive", label: "Xác Nhận", icon: Package },
   { id: "packing", label: "Soạn Hàng", icon: Package },
+  { id: "internal-dispatch", label: "Xuất Nội Bộ", icon: ArrowRightLeft },
   { id: "admin", label: "Quản trị", icon: Settings },
 ];
 
@@ -300,7 +303,7 @@ function ManageOrdersPanel() {
       )}
 
       <Dialog open={!!detailId} onOpenChange={(o) => !o && setDetailId(null)}>
-        <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto overflow-x-visible">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-[1600px] max-h-[calc(100vh-1rem)] overflow-y-auto p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle>Chi tiết phiếu</DialogTitle>
           </DialogHeader>
@@ -396,6 +399,7 @@ export default function WarehousePortal() {
       tabFromUrl === "manage" ||
       tabFromUrl === "receive" ||
       tabFromUrl === "packing" ||
+      tabFromUrl === "internal-dispatch" ||
       tabFromUrl === "admin"
     ) {
       return tabFromUrl;
@@ -414,6 +418,7 @@ export default function WarehousePortal() {
       tabFromUrl === "manage" ||
       tabFromUrl === "receive" ||
       tabFromUrl === "packing" ||
+      tabFromUrl === "internal-dispatch" ||
       tabFromUrl === "admin"
     ) {
       setTab(tabFromUrl);
@@ -615,6 +620,8 @@ export default function WarehousePortal() {
           </div>
         )}
 
+        {tab === "internal-dispatch" && <InternalDispatchWorkspace />}
+
         {tab === "xb" && (
           <div className="space-y-4">
             <BanKemDvPanel />
@@ -662,7 +669,7 @@ export default function WarehousePortal() {
         open={!!packDetailId}
         onOpenChange={(o) => !o && setPackDetailId(null)}
       >
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-[1600px] max-h-[calc(100vh-1rem)] overflow-y-auto p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle>Soạn hàng</DialogTitle>
           </DialogHeader>

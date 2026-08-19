@@ -82,11 +82,20 @@ const AdminProducts = () => {
   const { toast } = useToast();
 
   useEffect(() => {
-    if (sharedProducts?.length) {
-      setProducts((sharedProducts as Product[]) || []);
-    } else {
-      setProducts([]);
-    }
+    const nextProducts = Array.isArray(sharedProducts)
+      ? (sharedProducts as Product[])
+      : [];
+
+    setProducts((prevProducts) => {
+      if (
+        prevProducts.length === nextProducts.length &&
+        prevProducts.every((product, index) => product.id === nextProducts[index]?.id)
+      ) {
+        return prevProducts;
+      }
+
+      return nextProducts;
+    });
   }, [sharedProducts]);
 
   useEffect(() => {

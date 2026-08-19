@@ -62,6 +62,7 @@ interface Order {
   is_free_shipping: boolean;
   total_amount: number;
   status: string;
+  is_locked: boolean;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -370,6 +371,14 @@ const OrderLookup = () => {
                 </div>
               </CardHeader>
               <CardContent className="space-y-4 sm:space-y-6">
+                {order.is_locked && (
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>
+                      Đơn đã được khóa sau khi in, không thể thay đổi. Hãy tạo đơn mới nếu cần điều chỉnh.
+                    </AlertDescription>
+                  </Alert>
+                )}
                 {/* Order Info */}
                 <div className="grid gap-3 sm:gap-4 grid-cols-1 md:grid-cols-2">
                   <div>

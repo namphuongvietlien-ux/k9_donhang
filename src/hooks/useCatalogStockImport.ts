@@ -135,6 +135,7 @@ export function useCatalogForImport() {
 /** Upsert products in batches — tránh await từng dòng (chậm) */
 async function ensureProducts(
   parsed: ParsedCatalogStockImport,
+  options?: { newProductSelection?: Record<string, boolean> },
 ): Promise<{ created: number; updated: number; slugToId: Map<string, string> }> {
   const slugToId = new Map<string, string>();
   let created = 0;
@@ -176,8 +177,11 @@ async function ensureProducts(
       barcode: string | null;
       price: number | null;
       parentSku: string;
+      isNew: boolean;
     }
   >();
+
+  const newProductSelection = options?.newProductSelection || {};
 
   for (const line of validLines) {
     const rawCode = String(line.productSlug || "").trim();
@@ -211,6 +215,8 @@ async function ensureProducts(
     }
     if (!toCreateMap.has(key)) {
       const createSlug = rawCode || slugFromMaHang(line.maHang, line.tenHang);
+      const normalizedKey = normalizeOrderCodeText(rawCode);
+      const isNew = !!newProductSelection[normalizedKey] || !!newProductSelection[key] || !!newProductSelection[rawCode];
       toCreateMap.set(key, {
         slug: createSlug,
         name: line.tenHang || line.maHang,
@@ -218,6 +224,7 @@ async function ensureProducts(
         barcode: line.maVach || null,
         price: line.price ?? null,
         parentSku: line.parentSku,
+        isNew,
       });
     }
   }
@@ -284,7 +291,7 @@ async function ensureProducts(
       is_active: true,
       unit: c.unit,
       barcode: c.barcode,
-      is_new: true,
+      is_new: c.isNew,
       stock_quantity: 0,
       parent_sku: c.parentSku || null,
       description: c.parentSku
@@ -309,7 +316,7 @@ async function ensureProducts(
             is_active: true,
             unit: c.unit,
             barcode: c.barcode,
-            is_new: true,
+            is_new: c.isNew,
             stock_quantity: 0,
           } as never)
           .select("id, slug")
@@ -485,13 +492,16 @@ export function useCommitCatalogStockImport() {
     mutationFn: async (input: {
       parsed: ParsedCatalogStockImport;
       warehouseId: string;
+      newProductSelection?: Record<string, boolean>;
     }): Promise<CatalogStockImportResult> => {
       const { parsed, warehouseId } = input;
       if (!parsed.validCount) {
         throw new Error("Không có dòng hợp lệ để import.");
       }
 
-      const { created, updated, slugToId } = await ensureProducts(parsed);
+      const { created, updated, slugToId } = await ensureProducts(parsed, {
+        newProductSelection: input.newProductSelection,
+      });
 
       let stockUpserted = 0;
       if (parsed.mode === "stockQ7") {

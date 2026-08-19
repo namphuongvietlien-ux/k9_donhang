@@ -27,6 +27,7 @@ interface Order {
   customer_name: string;
   total_amount: number;
   status: string;
+  is_locked: boolean;
   created_at: string;
   notes: string | null;
 }
@@ -204,6 +205,11 @@ const OrderHistory = () => {
                         </div>
                         <div className="flex items-center gap-4">
                           {getStatusBadge(order.status)}
+                          {order.is_locked && (
+                            <Badge variant="outline" className="border-red-300 bg-red-50 text-red-700">
+                              Đã khóa
+                            </Badge>
+                          )}
                           <span className="font-semibold text-primary">
                             {formatPrice(order.total_amount)}
                           </span>
@@ -218,6 +224,11 @@ const OrderHistory = () => {
 
                     {isExpanded && (
                       <CardContent className="border-t">
+                        {order.is_locked && (
+                          <p className="mb-4 text-sm font-medium text-red-700">
+                            Đơn đã được khóa sau khi in, không thể thay đổi. Hãy tạo đơn mới nếu cần điều chỉnh.
+                          </p>
+                        )}
                         <div className="pt-4 space-y-3">
                           {items.length === 0 ? (
                             <div className="flex gap-2">

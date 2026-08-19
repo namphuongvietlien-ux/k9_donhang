@@ -5,7 +5,7 @@
  * 3. Quản Lý & Khóa Đơn Hàng (NEW / khóa / hết hàng)
  * 4. Cài Đặt Hệ Thống
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CheckSquare,
   Loader2,
@@ -23,6 +23,7 @@ import {
   Unlock,
 } from "lucide-react";
 import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -50,6 +51,81 @@ import { normalizeOrderCodeText } from "@/lib/packingWindows";
 import { cn } from "@/lib/utils";
 
 type FlagKind = "new" | "lock" | "out";
+
+type SkuCodeMapping = {
+  short_slug: string;
+  long_slug: string;
+  barcode: string;
+  created_at: string;
+};
+
+function SkuCodeMappingManager() {
+  const [shortSlug, setShortSlug] = useState("");
+  const [longSlug, setLongSlug] = useState("");
+  const [rows, setRows] = useState<SkuCodeMapping[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  const loadMappings = async () => {
+    const { data, error } = await supabase
+      .from("sku_code_mappings" as never)
+      .select("short_slug,long_slug,barcode,created_at")
+      .order("updated_at", { ascending: false });
+    if (error) {
+      toast.error("Không tải được danh sách mapping mã hàng.");
+      return;
+    }
+    setRows((data || []) as SkuCodeMapping[]);
+  };
+
+  useEffect(() => {
+    void loadMappings();
+  }, []);
+
+  const saveMapping = async () => {
+    const oldCode = normalizeOrderCodeText(shortSlug);
+    const newCode = normalizeOrderCodeText(longSlug);
+    if (!oldCode || !newCode) {
+      toast.error("Nhập đủ mã cũ và mã mới.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const { data, error } = await supabase.rpc(
+        "save_sku_code_mapping" as never,
+        { _short_slug: oldCode, _long_slug: newCode } as never,
+      );
+      if (error) throw error;
+      const updatedRows = Number(data) || 0;
+      toast.success(`Đã lưu mapping và đổi ${updatedRows} dòng đơn chưa khóa.`);
+      setShortSlug("");
+      setLongSlug("");
+      await loadMappings();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Không lưu được mapping mã hàng.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border bg-white p-4 space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold">Chuyển mã cũ sang mã mới</h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Chỉ lưu khi hai mã có cùng mã vạch. Đơn chưa khóa sẽ đổi ngay; đơn tạo sau này tự dùng mã mới.
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+        <div className="space-y-1"><Label htmlFor="short-sku">Mã cũ (ngắn)</Label><Input id="short-sku" value={shortSlug} onChange={(event) => setShortSlug(event.target.value)} placeholder="VD: TAC1063" /></div>
+        <div className="space-y-1"><Label htmlFor="long-sku">Mã mới (dài)</Label><Input id="long-sku" value={longSlug} onChange={(event) => setLongSlug(event.target.value)} placeholder="VD: CTPCHI1029" /></div>
+        <Button type="button" onClick={() => void saveMapping()} disabled={saving}>{saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}Lưu & áp dụng</Button>
+      </div>
+      <div className="overflow-x-auto rounded-md border">
+        <table className="w-full text-sm"><thead className="bg-slate-50 text-left"><tr><th className="p-2">Mã cũ</th><th className="p-2">Mã mới</th><th className="p-2">Mã vạch</th></tr></thead><tbody>{rows.map((row) => <tr key={row.short_slug} className="border-t"><td className="p-2 font-mono text-xs">{row.short_slug}</td><td className="p-2 font-mono text-xs">{row.long_slug}</td><td className="p-2 font-mono text-xs">{row.barcode}</td></tr>)}{!rows.length ? <tr><td colSpan={3} className="p-4 text-center text-muted-foreground">Chưa có mapping nào.</td></tr> : null}</tbody></table>
+      </div>
+    </div>
+  );
+}
 
 function FlagManager({
   kind,
@@ -934,6 +1010,13 @@ export default function CatalogAdminHub() {
             <Settings className="h-3.5 w-3.5" />
             4. Cài Đặt Hệ Thống
           </TabsTrigger>
+          <TabsTrigger
+            value="sku-mapping"
+            className="text-xs gap-1 data-[state=active]:bg-white"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            5. Chuyển Mã Hàng
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="variants" className="p-4 mt-0">
@@ -985,6 +1068,10 @@ export default function CatalogAdminHub() {
               </li>
             </ul>
           </div>
+        </TabsContent>
+
+        <TabsContent value="sku-mapping" className="p-4 mt-0">
+          <SkuCodeMappingManager />
         </TabsContent>
       </Tabs>
     </div>

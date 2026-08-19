@@ -8,6 +8,7 @@ import { format } from "date-fns";
 import { warehouseShortLabel } from "@/lib/warehouseMeta";
 
 export interface PrintOrderLine {
+  stt?: number | null;
   maHang: string;
   tenHang: string;
   dvt: string;
@@ -121,13 +122,21 @@ function buildOrderPdfHeaderHtml(detail: PrintOrderDetail): string {
   );
 }
 
+function sortPrintOrderItems<T extends { stt?: number | null }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const aStt = Number(a.stt ?? Number.MAX_SAFE_INTEGER);
+    const bStt = Number(b.stt ?? Number.MAX_SAFE_INTEGER);
+    return aStt - bStt;
+  });
+}
+
 export function buildOrderPdfSheetInnerHtml(detail: PrintOrderDetail): string {
   const headerHtml = buildOrderPdfHeaderHtml(detail);
   let rowsHtml = "";
-  let stt = 1;
-  for (const it of detail.items || []) {
+  const orderedItems = sortPrintOrderItems(detail.items || []);
+  orderedItems.forEach((it, index) => {
     const sl = Number(it.sl) || 0;
-    if (sl <= 0) continue;
+    if (sl <= 0) return;
     const parentCode = (it.parentSku || it.maHang || "").trim() || "—";
     const childCode = (it.maHang || "").trim();
     let variantLine = "";
@@ -156,13 +165,14 @@ export function buildOrderPdfSheetInnerHtml(detail: PrintOrderDetail): string {
       : it.isLocked
         ? ' style="background:#fef2f2;"'
         : "";
+    const stt = Number(it.stt ?? index + 1);
     rowsHtml +=
-      `<tr${rowBg}><td>${stt++}</td>` +
+      `<tr${rowBg}><td>${stt}</td>` +
       `<td class="code">${escapeHtml(parentCode)}${mvLine}${flagLine}</td>` +
       `<td>${escapeHtml(it.tenHang)}${variantLine}</td>` +
       `<td>${escapeHtml(it.dvt || "")}</td>` +
       `<td class="qty">${sl}</td><td class="note"></td></tr>`;
-  }
+  });
   if (!rowsHtml) {
     rowsHtml =
       '<tr><td colspan="6" style="text-align:center;color:#64748b;">Không có dòng hàng hợp lệ.</td></tr>';
@@ -280,18 +290,18 @@ export function exportOrderExcel(detail: PrintOrderDetail): void {
     [],
     ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Số lượng (Soạn)"],
   ];
-  let stt = 1;
-  for (const it of detail.items) {
-    if ((Number(it.sl) || 0) <= 0) continue;
+  const orderedItems = sortPrintOrderItems(detail.items || []);
+  orderedItems.forEach((it, index) => {
+    if ((Number(it.sl) || 0) <= 0) return;
     rows.push([
-      stt++,
+      Number(it.stt ?? index + 1),
       it.parentSku || it.maHang,
       it.maVach || "",
       it.tenHang,
       it.dvt || "",
       Number(it.sl) || 0,
     ]);
-  }
+  });
   const ws = XLSX.utils.aoa_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Phieu");
@@ -345,18 +355,21 @@ export function warehouseOrderToPrintDetail(order: {
     thoiGianTao: order.created_at,
     thoiGianCapNhat: order.updated_at || order.created_at,
     status: order.status,
-    items: order.order_items.map((it) => ({
-      maHang: it.product_slug || "",
-      tenHang: it.product_name,
-      dvt: it.unit || "",
-      maVach: it.barcode || "",
-      parentSku: it.product_slug || "",
-      sl: resolvePrintQty({
-        status: order.status,
-        qtyPacked: it.qty_packed,
-        qtyRequested: it.qty_requested,
-        quantity: it.quantity,
-      }),
-    })),
+    items: sortPrintOrderItems(
+      order.order_items.map((it) => ({
+        stt: Number((it as { stt?: number | null }).stt ?? 0) || null,
+        maHang: it.product_slug || "",
+        tenHang: it.product_name,
+        dvt: it.unit || "",
+        maVach: it.barcode || "",
+        parentSku: it.product_slug || "",
+        sl: resolvePrintQty({
+          status: order.status,
+          qtyPacked: it.qty_packed,
+          qtyRequested: it.qty_requested,
+          quantity: it.quantity,
+        }),
+      })),
+    ),
   };
 }

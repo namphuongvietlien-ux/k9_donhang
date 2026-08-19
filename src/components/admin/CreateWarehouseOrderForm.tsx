@@ -500,27 +500,37 @@ const CreateWarehouseOrderForm = forwardRef<
   };
 
   const doSave = async (acknowledgeDuplicate: boolean) => {
-    const incomplete = lines.find(
-      (l) =>
-        l.quantity > 0 &&
-        (!normalizeOrderCodeText(l.maHang) || !String(l.tenHang || "").trim()),
+    const preparedLines = lines.map((l) => {
+      if (l.quantity <= 0) return l;
+      if (l.isCustomSku && !String(l.tenHang || "").trim()) {
+        return {
+          ...l,
+          tenHang: String(l.maHang || "Hàng mới").trim() || "Hàng mới",
+        };
+      }
+      return l;
+    });
+
+    const incomplete = preparedLines.find(
+      (l) => l.quantity > 0 && !normalizeOrderCodeText(l.maHang),
     );
     if (incomplete) {
       toast({
-        title: "Thiếu thông tin dòng hàng",
-        description: `Mã ${incomplete.maHang || "—"} cần Tên hàng trước khi lưu.`,
+        title: "Thiếu mã hàng",
+        description: "Mỗi dòng cần có mã hàng trước khi lưu.",
         variant: "destructive",
       });
       return;
     }
+
     try {
       const res = await createOrder.mutateAsync({
         loaiPhieu: loai,
         sourceWarehouseId: sourceWh,
         destWarehouseId: destWh,
         acknowledgeDuplicate,
-        lines: lines.map((l) => ({
-          productName: l.tenHang.trim(),
+        lines: preparedLines.map((l) => ({
+          productName: String(l.tenHang || "").trim() || l.maHang || "Hàng mới",
           productSlug: l.maHang,
           quantity: l.quantity,
           price: l.price,

@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery } from "@tanstack/react-query";
 
@@ -36,7 +37,7 @@ export interface Product {
 
 export function useProducts() {
   const {
-    data: products = [],
+    data,
     isLoading: loading,
     error: queryError,
     refetch,
@@ -108,6 +109,11 @@ export function useProducts() {
     gcTime: 1000 * 60 * 10, // Giữ cache rác trong 10 phút
     refetchOnWindowFocus: false, // Tránh tự động gọi API ngầm khi bấm qua lại giữa các tab
   });
+
+  const products = useMemo(
+    () => (Array.isArray(data) ? (data as Product[]) : []) as Product[],
+    [data],
+  );
 
   return {
     products,

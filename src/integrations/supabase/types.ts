@@ -184,6 +184,8 @@ export type Database = {
           customer_phone: string | null
           discount_amount: number | null
           id: string
+          is_locked: boolean
+          locked_at: string | null
           notes: string | null
           status: string
           total_amount: number
@@ -198,6 +200,8 @@ export type Database = {
           customer_phone?: string | null
           discount_amount?: number | null
           id?: string
+          is_locked?: boolean
+          locked_at?: string | null
           notes?: string | null
           status?: string
           total_amount?: number
@@ -212,6 +216,8 @@ export type Database = {
           customer_phone?: string | null
           discount_amount?: number | null
           id?: string
+          is_locked?: boolean
+          locked_at?: string | null
           notes?: string | null
           status?: string
           total_amount?: number

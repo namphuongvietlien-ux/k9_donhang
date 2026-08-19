@@ -11,6 +11,15 @@ import {
   Upload,
   Warehouse,
 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { downloadImportTemplate } from "@/lib/importTemplates";
 import { useWarehouses, warehouseLabel } from "@/hooks/useWarehouses";
 import {
@@ -45,6 +54,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { normalizeOrderCodeText } from "@/lib/packingWindows";
 
 type Step = 1 | 2 | 3;
 
@@ -96,6 +106,9 @@ export default function CatalogStockImport({
   const [parseError, setParseError] = useState<string | null>(null);
   const [parsing, setParsing] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [newProductSelection, setNewProductSelection] = useState<Record<string, boolean>>({});
+  const [newProductReviewDone, setNewProductReviewDone] = useState(false);
 
   useEffect(() => {
     if (!warehouses.length || warehouseId) return;
@@ -109,6 +122,9 @@ export default function CatalogStockImport({
       setParseError(null);
       setParsed(null);
       setFileName(file.name);
+      setNewProductReviewDone(false);
+      setConfirmOpen(false);
+      setNewProductSelection({});
       try {
         if (!catalog) throw new Error("Đang tải danh mục, thử lại sau vài giây.");
         const matrix = await fileToMatrix(file);
@@ -141,12 +157,35 @@ export default function CatalogStockImport({
     setStep(1);
   };
 
-  const canConfirm = !!parsed && parsed.validCount > 0 && !commit.isPending;
+  const existingProducts = useMemo(() => {
+    if (!parsed) return [];
+    return parsed.lines.filter((line) => !line.willCreate);
+  }, [parsed]);
+
+  const newProducts = useMemo(() => {
+    if (!parsed) return [];
+    return parsed.lines.filter((line) => line.willCreate);
+  }, [parsed]);
+
+  const canConfirm =
+    !!parsed &&
+    parsed.validCount > 0 &&
+    !commit.isPending &&
+    (!newProducts.length || newProductReviewDone);
+
+  const getNewProductKey = (line: { productSlug?: string | null; maHang?: string | null }) =>
+    normalizeOrderCodeText(line.productSlug || line.maHang || "");
 
   const handleImport = async () => {
     if (!parsed) return;
     try {
-      const res = await commit.mutateAsync({ parsed, warehouseId });
+      const selection = Object.fromEntries(
+        newProducts.map((line) => {
+          const key = getNewProductKey(line);
+          return [key, !!newProductSelection[key]];
+        }),
+      );
+      const res = await commit.mutateAsync({ parsed, warehouseId, newProductSelection: selection });
       const msg =
         res.mode === "catalogFast"
           ? `Đã nhập khẩu danh mục: tạo ${res.productsCreated} mã, cập nhật ${res.productsUpdated} mã (như GAS catalogFast → Data_Excel).`
@@ -170,6 +209,27 @@ export default function CatalogStockImport({
   const whLabel = selectedWh ? warehouseLabel(selectedWh) : "—";
 
   const previewLines = useMemo(() => parsed?.lines.slice(0, 80) ?? [], [parsed]);
+
+  const toggleNewProduct = (key: string, checked: boolean) => {
+    setNewProductSelection((prev) => ({ ...prev, [key]: checked }));
+  };
+
+  useEffect(() => {
+    if (!parsed || !newProducts.length || newProductReviewDone) return;
+    setConfirmOpen(true);
+  }, [parsed, newProducts.length, newProductReviewDone]);
+
+  useEffect(() => {
+    if (!parsed) return;
+    const next: Record<string, boolean> = {};
+    for (const line of parsed.lines) {
+      if (!line.willCreate) continue;
+      const key = getNewProductKey(line);
+      if (!key) continue;
+      next[key] = false;
+    }
+    setNewProductSelection((prev) => ({ ...prev, ...next }));
+  }, [parsed]);
 
   return (
     <Card className={cn(className)}>
@@ -314,9 +374,12 @@ export default function CatalogStockImport({
             <div className="flex flex-wrap gap-2 text-sm">
               <Badge variant="secondary">{parsed.lines.length} dòng</Badge>
               <Badge variant="secondary">{parsed.validCount} hợp lệ</Badge>
-              {parsed.newProductCount > 0 && (
+              {existingProducts.length > 0 && (
+                <Badge variant="outline">{existingProducts.length} mã đã có</Badge>
+              )}
+              {newProducts.length > 0 && (
                 <Badge className="bg-sky-100 text-sky-900 hover:bg-sky-100">
-                  {parsed.newProductCount} mã mới
+                  {newProducts.length} mã mới cần xác nhận
                 </Badge>
               )}
               {mode === "stockQ7" && (
@@ -426,6 +489,22 @@ export default function CatalogStockImport({
                 )}
               </AlertDescription>
             </Alert>
+            {newProducts.length > 0 && (
+              <div className="rounded-lg border bg-background p-3 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold">Danh sách mã mới cần xác nhận</p>
+                    <p className="text-xs text-muted-foreground">
+                      Mặc định chưa chọn, an toàn cho hàng cũ. Tick chọn nếu đây là hàng mới thật sự.
+                    </p>
+                  </div>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setConfirmOpen(true)}>
+                    Xem / chỉnh lựa chọn
+                  </Button>
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => setStep(2)} disabled={commit.isPending}>
                 Quay lại
@@ -444,6 +523,64 @@ export default function CatalogStockImport({
                 )}
               </Button>
             </div>
+
+            <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+              <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Danh sách mã mới cần xác nhận</DialogTitle>
+                  <DialogDescription>
+                    Chọn các mã mới thật sự để gắn is_new = true. Các mã còn lại sẽ được import với is_new = false.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="rounded-md border overflow-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-10">✓</TableHead>
+                        <TableHead>Mã hàng</TableHead>
+                        <TableHead>Tên hàng</TableHead>
+                        <TableHead>ĐVT</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {newProducts.map((line) => {
+                        const key = normalizeOrderCodeText(line.productSlug || line.maHang || "");
+                        const checked = !!newProductSelection[key];
+                        return (
+                          <TableRow key={key || `${line.rowIndex}-${line.maHang}`}>
+                            <TableCell>
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(value) => toggleNewProduct(key, !!value)}
+                              />
+                            </TableCell>
+                            <TableCell className="font-mono text-sm">{line.maHang}</TableCell>
+                            <TableCell>{line.tenHang}</TableCell>
+                            <TableCell>{line.dvt || "—"}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setConfirmOpen(false)}
+                  >
+                    Hủy
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setNewProductReviewDone(true);
+                      setConfirmOpen(false);
+                    }}
+                  >
+                    Xác nhận lựa chọn
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </div>
         )}
       </CardContent>
