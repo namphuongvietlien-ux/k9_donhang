@@ -142,7 +142,11 @@ export default function WarehouseOrderDetail({
   const { data: q7 } = usePackingSourceWarehouse();
   const stockWhId =
     order?.source_warehouse_id || order?.source_warehouse?.id || q7?.id || null;
-  const { getQty } = useStock(stockWhId);
+  const {
+    getQty,
+    getVerifiedQty,
+    loading: stockLoading,
+  } = useStock(stockWhId);
   const { toast } = useToast();
 
   const [packed, setPacked] = useState<Record<string, number>>({});
@@ -618,10 +622,9 @@ export default function WarehouseOrderDetail({
   const isItemStockShort = (it: typeof order.order_items[number]) => {
     const requiredQty = Number(it.qty_requested ?? it.quantity) || 0;
     const availableQty =
-      getQty(it.product_slug, lineUnit(it)) ??
-      getQty(lineBarcode(it), lineUnit(it)) ??
-      getQty(it.product_name, lineUnit(it));
-    return availableQty != null && availableQty < requiredQty;
+      getVerifiedQty(it.product_slug, lineUnit(it)) ??
+      getVerifiedQty(lineBarcode(it), lineUnit(it));
+    return availableQty == null || availableQty < requiredQty;
   };
   const exportableOrderItems = order.order_items.filter(
     (it) => !it.is_out_stock && !it.is_locked && !isItemStockShort(it),
@@ -891,6 +894,7 @@ export default function WarehouseOrderDetail({
             onClick={() => {
               openOrderPdfWindow(createPrintDetail());
             }}
+            disabled={stockLoading}
           >
             <Printer className="w-4 h-4 mr-1" />
             Xem / In PDF
@@ -901,6 +905,7 @@ export default function WarehouseOrderDetail({
             onClick={() => {
               printOrderViaIframe(createPrintDetail());
             }}
+            disabled={stockLoading}
           >
             In nhanh
           </Button>
@@ -911,6 +916,7 @@ export default function WarehouseOrderDetail({
               exportOrderExcel(createPrintDetail());
               toast({ title: "Đã tải file Excel" });
             }}
+            disabled={stockLoading}
           >
             <FileSpreadsheet className="w-4 h-4 mr-1" />
             Xuất Excel

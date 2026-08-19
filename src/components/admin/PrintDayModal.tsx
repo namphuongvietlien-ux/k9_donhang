@@ -13,6 +13,7 @@ import {
 } from "@/lib/productCatalogMeta";
 import { enrichWarehouseMeta, warehouseShortLabel } from "@/lib/warehouseMeta";
 import { warehouseLabel } from "@/hooks/useWarehouses";
+import { usePackingSourceWarehouse, useStock } from "@/hooks/useStock";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -96,6 +97,7 @@ async function fetchPrintDetails(
     price?: number | null;
     stock_quantity?: number | null;
   }>,
+  getVerifiedQty: (code: string | null | undefined, unit?: string | null) => number | null,
 ): Promise<PrintOrderDetail[]> {
   // Select cơ bản trước — tránh 400 khi chưa migration address
   const { data, error } = await supabase
@@ -169,10 +171,20 @@ async function fetchPrintDetails(
       thoiGianTao: o.created_at,
       thoiGianCapNhat: o.updated_at || o.created_at,
       status: o.status,
-      items: (o.order_items || []).map((it) => {
+      items: (o.order_items || []).flatMap((it) => {
         const meta = getMeta(metaIndex, it.product_slug);
         const resolved = resolveLineUnitBarcode(meta, it.unit, it.barcode);
-        return {
+        const requiredQty = Number(it.qty_requested ?? it.quantity) || 0;
+        const verifiedQty =
+          getVerifiedQty(it.product_slug, resolved.unit) ??
+          getVerifiedQty(resolved.barcode, resolved.unit);
+        if (
+          verifiedQty == null ||
+          verifiedQty < requiredQty ||
+          meta?.is_locked ||
+          meta?.is_out_stock
+        ) return [];
+        return [{
           maHang: it.product_slug || "",
           tenHang: it.product_name,
           dvt: resolved.unit || "",
@@ -186,10 +198,10 @@ async function fetchPrintDetails(
           }),
           isNew: !!meta?.is_new,
           isLocked: !!meta?.is_locked,
-        };
+        }];
       }),
     };
-  });
+  }).filter((detail) => detail.items.length > 0);
 }
 
 /**
@@ -206,6 +218,8 @@ export default function PrintDayModal({
 }: PrintDayModalProps) {
   const { toast } = useToast();
   const { products: sharedProducts = [] } = useProducts();
+  const { data: q7 } = usePackingSourceWarehouse();
+  const { getVerifiedQty, loading: stockLoading } = useStock(q7?.id || null);
   const [whFilter, setWhFilter] = useState<string>("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -254,8 +268,14 @@ export default function PrintDayModal({
     }
     setBusy(true);
     try {
-      const details = await fetchPrintDetails(ids, sharedProducts);
-      if (!details.length) throw new Error("Không tải được chi tiết đơn.");
+      const details = await fetchPrintDetails(ids, sharedProducts, getVerifiedQty);
+      if (!details.length) throw new Error("Không có dòng nào đủ tồn Q7 để in.");
+      if (details.length < ids.length) {
+        toast({
+          title: "Đã lọc mã thiếu tồn",
+          description: `${ids.length - details.length} phiếu không còn dòng đủ tồn để in.`,
+        });
+      }
       openMultiOrderPdfWindow(details, `In ${details.length} đơn — ${dateLabel}`);
       onOpenChange(false);
     } catch (e) {
@@ -390,7 +410,7 @@ export default function PrintDayModal({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Đóng
           </Button>
-          <Button onClick={() => void handlePrint()} disabled={busy}>
+          <Button onClick={() => void handlePrint()} disabled={busy || stockLoading}>
             {busy ? (
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             ) : (

@@ -481,6 +481,23 @@ export function useStock(warehouseId?: string | null, enabled = true) {
     [index],
   );
 
+  /**
+   * Dùng khi quyết định có được xuất/in: chỉ chấp nhận tồn stock_on_hand
+   * khớp đúng mã và ĐVT, không fallback products.stock_quantity hay mã trần.
+   */
+  const getVerifiedQty = useCallback(
+    (
+      slugOrIdOrBarcode: string | null | undefined,
+      unit?: string | null,
+    ): number | null => {
+      if (!slugOrIdOrBarcode || !normalizeUnitKey(unit)) return null;
+      const key = stockCompositeKey(slugOrIdOrBarcode, unit);
+      const row = index.byComposite.get(key);
+      return row?.source === "stock_on_hand" ? row.quantity : null;
+    },
+    [index],
+  );
+
   const sohCount = useMemo(
     () => (query.data ?? []).filter((r) => r.source === "stock_on_hand").length,
     [query.data],
@@ -491,6 +508,7 @@ export function useStock(warehouseId?: string | null, enabled = true) {
     bySlug: index.byComposite,
     getQty,
     getRow,
+    getVerifiedQty,
     loading: query.isLoading || query.isFetching,
     error: query.error,
     refetch: query.refetch,
