@@ -1,0 +1,17 @@
+[TASK: DEBUG & FIX TELEGRAM NOTIFICATIONS END-TO-END]
+Hệ thống quản lý kho "K9" hiện đang gặp lỗi: các nút bấm hoặc sự kiện kích hoạt thông báo Telegram (như khi tạo/duyệt đơn xuất nội bộ) không hoạt động hoặc không gửi được tin nhắn đến group.
+
+Hãy giúp tôi kiểm tra toàn bộ luồng từ Client đến Edge Function theo các bước sau:
+
+1. Kiểm tra Client-side & Helper (`src/lib/telegramNotify.ts`):
+   - Kiểm tra cách hàm gọi Telegram (hoặc gọi Supabase Edge Function `notify-telegram`) được thiết lập. 
+   - Kiểm tra payload truyền đi có khớp với cấu trúc yêu cầu của Telegram API không (`chat_id`, `text`, `parse_mode: "HTML"`).
+
+2. Kiểm tra Supabase Edge Function (`supabase/functions/notify-telegram/index.ts`):
+   - Kiểm tra xem Edge Function có đang đọc đúng các biến môi trường (Secrets) như `TELEGRAM_BOT_TOKEN` và `TELEGRAM_INTERNAL_CHAT_ID` bằng `Deno.env.get()` không.
+   - Kiểm tra xử lý lỗi (try-catch) khi fetch sang endpoint `https://api.telegram.org/bot<TOKEN>/sendMessage`.
+
+3. Kiểm tra UI Trigger:
+   - Kiểm tra các component giao diện (ví dụ: `InternalDispatchWorkspace.tsx` hoặc các nút duyệt đơn) xem sự kiện `onClick` có gọi đúng hàm bất đồng kỳ (async/await) và có bị nuốt lỗi (silent catch) không.
+
+4. Đưa ra giải pháp và mã nguồn sửa lỗi chi tiết cho các file liên quan để hệ thống thực sự bắn được thông báo sang Telegram khi thao tác.

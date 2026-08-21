@@ -130,10 +130,12 @@ export default function WarehouseOrderDetail({
     restoreOrder,
     setOrderStatus,
     setOrderLock,
+    emergencyUnlockOrder,
     savePacking,
   } = useWarehouseOrderMutations();
   const { role, username, user } = useAuth();
   const isAdmin = role === "super_admin" || role === "manager";
+  const canEmergencyUnlock = role === "super_admin";
   const actorLabel =
     username ||
     user?.email?.split("@")[0] ||
@@ -846,6 +848,23 @@ export default function WarehouseOrderDetail({
     }
   };
 
+  const handleEmergencyUnlock = async () => {
+    const reason = window.prompt(
+      `Lý do mở khóa khẩn cấp đơn ${order.order_code}:`,
+    );
+    if (!reason?.trim()) return;
+    try {
+      await emergencyUnlockOrder.mutateAsync({ orderId: order.id, reason });
+      toast({ title: "Đã mở khóa khẩn cấp", description: "Lý do đã được lưu vào nhật ký quản trị." });
+    } catch (error) {
+      toast({
+        title: "Không thể mở khóa",
+        description: error instanceof Error ? error.message : "Lỗi",
+        variant: "destructive",
+      });
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -921,19 +940,26 @@ export default function WarehouseOrderDetail({
             <FileSpreadsheet className="w-4 h-4 mr-1" />
             Xuất Excel
           </Button>
-          {isAdmin && (
+          {isAdmin && !order.is_locked && (
             <Button
-              variant={order.is_locked ? "secondary" : "outline"}
+              variant="outline"
               size="sm"
               onClick={() => void handleToggleOrderLock()}
               disabled={setOrderLock.isPending}
             >
-              {order.is_locked ? (
-                <Unlock className="w-4 h-4 mr-1" />
-              ) : (
-                <Lock className="w-4 h-4 mr-1" />
-              )}
-              {order.is_locked ? "Mở khóa đơn" : "Khóa đặt hàng"}
+              <Lock className="w-4 h-4 mr-1" />
+              Khóa đặt hàng
+            </Button>
+          )}
+          {canEmergencyUnlock && order.is_locked && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void handleEmergencyUnlock()}
+              disabled={emergencyUnlockOrder.isPending}
+            >
+              {emergencyUnlockOrder.isPending ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Unlock className="w-4 h-4 mr-1" />}
+              Mở khóa khẩn cấp
             </Button>
           )}
           {isAdmin && (

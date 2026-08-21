@@ -1,11 +1,15 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 import { Bell, Check, FileDown, Loader2, Plus, Printer, Send, Trash2, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useProducts } from "@/hooks/useProducts";
-import { notifyInternalDispatchTelegram } from "@/lib/telegramNotify";
+import {
+  escapeTelegramHtml,
+  notifyInternalDispatchTelegram,
+  type TelegramNotifyResult,
+} from "@/lib/telegramNotify";
 import { filterCatalogSuggestions } from "@/lib/catalogSearch";
 import { ProductSearchInput } from "@/components/admin/ProductSearchInput";
 import { Button } from "@/components/ui/button";
@@ -83,6 +87,49 @@ export default function InternalDispatchWorkspace() {
   });
 
   const refresh = () => Promise.all([queryClient.invalidateQueries({ queryKey: ["internal-dispatches"] }), queryClient.invalidateQueries({ queryKey: ["weekly-orders"] })]);
+
+  /**
+   * Manager duyệt/từ chối từ Telegram → telegram-webhook đổi DB ngoài app.
+   * Query defaults của App.tsx (staleTime 5', refetchOnMount/Focus = false) giữ
+   * UI cũ tới khi F5, nên phải nghe realtime rồi invalidate.
+   * Cần migration 20260821000001 để 3 bảng này nằm trong publication realtime.
+   */
+  useEffect(() => {
+    if (!user) return;
+    const channel = supabase
+      .channel("internal-dispatch-sync")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "internal_dispatches" },
+        () => { void queryClient.invalidateQueries({ queryKey: ["internal-dispatches"] }); },
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "weekly_orders" },
+        () => { void queryClient.invalidateQueries({ queryKey: ["weekly-orders"] }); },
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "weekly_order_items" },
+        () => { void queryClient.invalidateQueries({ queryKey: ["weekly-orders"] }); },
+      )
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [user, queryClient]);
+
+  /**
+   * Telegram không được chặn nghiệp vụ: nghiệp vụ đã lưu xong mới bắn thông
+   * báo, và lỗi thông báo chỉ hiện cảnh báo (không làm mutation thành thất bại).
+   */
+  const warnIfTelegramFailed = (result: TelegramNotifyResult) => {
+    if (result.ok) return;
+    toast({
+      title: result.skipped ? "Chưa gửi được Telegram" : "Lỗi gửi Telegram",
+      description: `${result.error || "Không rõ nguyên nhân"} — thao tác đã lưu, chỉ thông báo bị lỗi.`,
+      variant: "destructive",
+    });
+  };
+
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!warehouseId) throw new Error("Tài khoản chưa được gán chi nhánh.");
@@ -91,31 +138,55 @@ export default function InternalDispatchWorkspace() {
       return data as string;
     },
     onSuccess: async (dispatchId) => {
-      await notifyInternalDispatchTelegram(`📦 <b>Đơn xuất nội bộ mới</b>\nChi nhánh: ${warehouseLabel || "—"}\nSố dòng: ${lines.length}\nTrạng thái: chờ quản lý duyệt`, { warehouseId: warehouseId || undefined, internalDispatchId: dispatchId });
+      const lineCount = lines.length;
       setLines([]); setNotes(""); await refresh();
       toast({ title: "Đã gửi đơn xuất nội bộ" });
+      warnIfTelegramFailed(await notifyInternalDispatchTelegram(
+        `📦 <b>Đơn xuất nội bộ mới</b>\nChi nhánh: ${escapeTelegramHtml(warehouseLabel || "—")}\nSố dòng: ${lineCount}\nTrạng thái: chờ quản lý duyệt`,
+        { warehouseId: warehouseId || undefined, internalDispatchId: dispatchId },
+      ));
     }, onError: (error: Error) => toast({ title: "Không gửi được đơn", description: error.message, variant: "destructive" }),
   });
   const approveMutation = useMutation({
     mutationFn: async (dispatch: Dispatch) => {
       const { error } = await supabase.rpc("approve_internal_dispatch" as never, { _dispatch_id: dispatch.id } as never);
       if (error) throw error;
-      await notifyInternalDispatchTelegram(`✅ <b>Quản lý đã duyệt ${dispatch.dispatch_code}</b>\nChi nhánh: ${dispatch.warehouses?.code || "—"}\nHàng đã được cộng vào đơn tuần.`, { recipientUserIds: [dispatch.requested_by] });
-    }, onSuccess: refresh, onError: (error: Error) => toast({ title: "Không thể duyệt", description: error.message, variant: "destructive" }),
+      return dispatch;
+    },
+    onSuccess: async (dispatch) => {
+      await refresh();
+      warnIfTelegramFailed(await notifyInternalDispatchTelegram(
+        `✅ <b>Quản lý đã duyệt ${escapeTelegramHtml(dispatch.dispatch_code)}</b>\nChi nhánh: ${escapeTelegramHtml(dispatch.warehouses?.code || "—")}\nHàng đã được cộng vào đơn tuần.`,
+        { recipientUserIds: [dispatch.requested_by] },
+      ));
+    }, onError: (error: Error) => toast({ title: "Không thể duyệt", description: error.message, variant: "destructive" }),
   });
   const rejectMutation = useMutation({
     mutationFn: async (dispatch: Dispatch) => {
       const { error } = await supabase.rpc("reject_internal_dispatch" as never, { _dispatch_id: dispatch.id } as never);
       if (error) throw error;
-      await notifyInternalDispatchTelegram(`❌ <b>Quản lý không duyệt ${dispatch.dispatch_code}</b>\nChi nhánh: ${dispatch.warehouses?.code || "—"}\nVui lòng kiểm tra và tạo lại yêu cầu khi cần.`, { recipientUserIds: [dispatch.requested_by] });
-    }, onSuccess: refresh, onError: (error: Error) => toast({ title: "Không thể từ chối", description: error.message, variant: "destructive" }),
+      return dispatch;
+    },
+    onSuccess: async (dispatch) => {
+      await refresh();
+      warnIfTelegramFailed(await notifyInternalDispatchTelegram(
+        `❌ <b>Quản lý không duyệt ${escapeTelegramHtml(dispatch.dispatch_code)}</b>\nChi nhánh: ${escapeTelegramHtml(dispatch.warehouses?.code || "—")}\nVui lòng kiểm tra và tạo lại yêu cầu khi cần.`,
+        { recipientUserIds: [dispatch.requested_by] },
+      ));
+    }, onError: (error: Error) => toast({ title: "Không thể từ chối", description: error.message, variant: "destructive" }),
   });
   const completeMutation = useMutation({
     mutationFn: async (weekly: WeeklyOrder) => {
       const { error } = await supabase.rpc("complete_weekly_order" as never, { _weekly_order_id: weekly.id } as never);
       if (error) throw error;
-      await notifyInternalDispatchTelegram(`🏢 <b>Tổng công ty đã xử lý đơn tuần</b>\nTuần từ ${weekly.week_start}\nQuản lý có thể đối chiếu và lưu hồ sơ.`);
-    }, onSuccess: refresh, onError: (error: Error) => toast({ title: "Không thể hoàn tất", description: error.message, variant: "destructive" }),
+      return weekly;
+    },
+    onSuccess: async (weekly) => {
+      await refresh();
+      warnIfTelegramFailed(await notifyInternalDispatchTelegram(
+        `🏢 <b>Tổng công ty đã xử lý đơn tuần</b>\nTuần từ ${escapeTelegramHtml(weekly.week_start)}\nQuản lý có thể đối chiếu và lưu hồ sơ.`,
+      ));
+    }, onError: (error: Error) => toast({ title: "Không thể hoàn tất", description: error.message, variant: "destructive" }),
   });
   const printMutation = useMutation({
     mutationFn: async (weekly: WeeklyOrder) => {

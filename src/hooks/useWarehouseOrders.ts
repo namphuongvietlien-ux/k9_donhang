@@ -1052,6 +1052,17 @@ export function useWarehouseOrderMutations() {
     onSuccess: invalidate,
   });
 
+  const emergencyUnlockOrder = useMutation({
+    mutationFn: async (input: { orderId: string; reason: string }) => {
+      const { error } = await supabase.rpc(
+        "admin_unlock_order" as never,
+        { _order_id: input.orderId, _reason: input.reason } as never,
+      );
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+  });
+
   /** GAS savePackingQty / luuSoSoanHang — status processing */
   const savePackingQty = useMutation({
     mutationFn: async (input: {
@@ -1283,5 +1294,6 @@ export function useWarehouseOrderMutations() {
     restoreOrder,
     setOrderStatus,
     setOrderLock,
+    emergencyUnlockOrder,
   };
 }

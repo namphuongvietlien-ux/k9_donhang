@@ -16,6 +16,12 @@ async function telegramApi(token: string, method: string, body: Record<string, u
   });
 }
 
+/** Bắt buộc khi gửi parse_mode HTML — tên hàng/kho có `&` sẽ làm Telegram trả 400. */
+const escapeHtml = (value: unknown) => String(value ?? "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;");
+
 serve(async (req) => {
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
@@ -87,7 +93,9 @@ serve(async (req) => {
     await telegramApi(token, "editMessageText", {
       chat_id: chatId,
       message_id: messageId,
-      text: `${callback.message.text}\n\n<b>${statusText}</b>`,
+      // callback.message.text là text ĐÃ render (entities bị bỏ) — phải escape
+      // lại trước khi gửi kèm parse_mode HTML.
+      text: `${escapeHtml(callback.message.text)}\n\n<b>${statusText}</b>`,
       parse_mode: "HTML",
     });
 
@@ -97,7 +105,7 @@ serve(async (req) => {
       { headers },
     );
     const [requester] = await requesterResponse.json();
-    const updateText = `${statusText}\nMã đơn: <b>${result.dispatch_code}</b>${approved ? "\nĐơn đã được cộng vào Đơn tuần." : "\nVui lòng kiểm tra và tạo lại yêu cầu khi cần."}`;
+    const updateText = `${statusText}\nMã đơn: <b>${escapeHtml(result.dispatch_code)}</b>${approved ? "\nĐơn đã được cộng vào Đơn tuần." : "\nVui lòng kiểm tra và tạo lại yêu cầu khi cần."}`;
     if (requester?.chat_id) {
       await telegramApi(token, "sendMessage", {
         chat_id: requester.chat_id,

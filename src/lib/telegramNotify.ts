@@ -93,17 +93,100 @@ export function buildWarehouseTelegramText(input: {
   }
 }
 
-/** Fire-and-forget — không throw ra UI */
-export async function notifyTelegram(text: string): Promise<void> {
-  const msg = String(text || "").trim();
-  if (!msg) return;
+/** Escape nội dung động trước khi nhúng vào text parse_mode HTML. */
+export function escapeTelegramHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+export interface TelegramNotifyResult {
+  ok: boolean;
+  /** true khi Edge Function bỏ qua vì thiếu secret / chưa có người nhận */
+  skipped?: boolean;
+  error?: string;
+}
+
+/**
+ * Gọi Edge Function notify-telegram.
+ *
+ * Không throw (Telegram không được chặn nghiệp vụ kho) NHƯNG luôn trả về kết
+ * quả thật: `supabase.functions.invoke` không throw khi HTTP != 2xx, nó trả
+ * `{ error }` — nuốt lặng giá trị này là lý do trước đây lỗi Telegram hoàn
+ * toàn vô hình trên UI.
+ */
+async function invokeNotifyTelegram(
+  body: Record<string, unknown>,
+): Promise<TelegramNotifyResult> {
   try {
-    await supabase.functions.invoke("notify-telegram", {
-      body: { text: msg },
+    const { data, error } = await supabase.functions.invoke("notify-telegram", {
+      body,
     });
-  } catch {
-    /* ignore — Telegram không chặn nghiệp vụ */
+
+    if (error) {
+      // FunctionsHttpError giữ response — đọc để lấy message tiếng Việt từ function.
+      let detail = error.message || "Không gọi được notify-telegram";
+      const response = (error as { context?: Response }).context;
+      if (response && typeof response.json === "function") {
+        try {
+          const payload = await response.clone().json();
+          if (payload?.error) detail = String(payload.error);
+        } catch {
+          /* body không phải JSON — giữ message gốc */
+        }
+      }
+      const result: TelegramNotifyResult = { ok: false, error: detail };
+      logTelegramFailure(result, body);
+      return result;
+    }
+
+    const payload = (data || {}) as {
+      ok?: boolean;
+      skipped?: boolean;
+      error?: string;
+    };
+    if (payload.ok) return { ok: true };
+
+    const result: TelegramNotifyResult = {
+      ok: false,
+      skipped: !!payload.skipped,
+      error: payload.error || "Telegram không gửi được",
+    };
+    logTelegramFailure(result, body);
+    return result;
+  } catch (e) {
+    const result: TelegramNotifyResult = {
+      ok: false,
+      error: e instanceof Error ? e.message : "Lỗi gọi notify-telegram",
+    };
+    logTelegramFailure(result, body);
+    return result;
   }
+}
+
+function logTelegramFailure(
+  result: TelegramNotifyResult,
+  body: Record<string, unknown>,
+) {
+  if (process.env.NODE_ENV === "development") {
+    console.warn("[notify-telegram] không gửi được:", result, body);
+  }
+}
+
+/** Không throw ra UI — nhưng trả kết quả để caller có thể cảnh báo. */
+export async function notifyTelegram(
+  text: string,
+  options?: { parseMode?: "HTML" | null },
+): Promise<TelegramNotifyResult> {
+  const msg = String(text || "").trim();
+  if (!msg) return { ok: false, skipped: true, error: "Thiếu nội dung" };
+  return invokeNotifyTelegram({
+    text: msg,
+    // Text nghiệp vụ là plain text (tên kho/hàng có thể chứa & < >) —
+    // gửi kèm parse_mode HTML sẽ bị Telegram trả 400 và mất tin nhắn.
+    parseMode: options?.parseMode ?? null,
+  });
 }
 
 /** Kênh nghiệp vụ nội bộ, tách hoàn toàn khỏi nhóm đơn khách lẻ. */
@@ -113,23 +196,20 @@ export async function notifyInternalDispatchTelegram(
     warehouseId?: string;
     recipientUserIds?: string[];
     internalDispatchId?: string;
+    /** Mặc định HTML — text nội bộ có thẻ <b>; nội dung động phải escape trước. */
+    parseMode?: "HTML" | null;
   },
-): Promise<void> {
+): Promise<TelegramNotifyResult> {
   const msg = String(text || "").trim();
-  if (!msg) return;
-  try {
-    await supabase.functions.invoke("notify-telegram", {
-      body: {
-        text: msg,
-        channel: "internal",
-        internalWarehouseId: options?.warehouseId,
-        recipientUserIds: options?.recipientUserIds,
-        internalDispatchId: options?.internalDispatchId,
-      },
-    });
-  } catch {
-    /* Telegram không được phép chặn nghiệp vụ kho */
-  }
+  if (!msg) return { ok: false, skipped: true, error: "Thiếu nội dung" };
+  return invokeNotifyTelegram({
+    text: msg,
+    channel: "internal",
+    parseMode: options?.parseMode ?? "HTML",
+    internalWarehouseId: options?.warehouseId,
+    recipientUserIds: options?.recipientUserIds,
+    internalDispatchId: options?.internalDispatchId,
+  });
 }
 
 export async function notifyWarehouseEvent(input: {
@@ -138,6 +218,6 @@ export async function notifyWarehouseEvent(input: {
   khoXuat?: string;
   khoNhan?: string;
   extra?: string;
-}): Promise<void> {
-  await notifyTelegram(buildWarehouseTelegramText(input));
+}): Promise<TelegramNotifyResult> {
+  return notifyTelegram(buildWarehouseTelegramText(input));
 }

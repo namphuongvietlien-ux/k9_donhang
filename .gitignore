@@ -36,3 +36,6 @@ dist-ssr
 
 # Catch-all env secrets
 .env*
+
+# Cache incremental của `tsc -b` (lệnh typecheck thật)
+*.tsbuildinfo
