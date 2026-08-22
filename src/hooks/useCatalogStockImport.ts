@@ -55,7 +55,9 @@ async function fetchAllActiveProducts(): Promise<CatalogProductRowLite[]> {
       .from("products")
       .select(selectFull)
       .eq("is_active", true)
+      // Khóa phụ duy nhất — tránh lệch trang khi slug rỗng/trùng
       .order("slug", { ascending: true })
+      .order("id", { ascending: true })
       .range(from, to);
 
     if (
@@ -69,6 +71,7 @@ async function fetchAllActiveProducts(): Promise<CatalogProductRowLite[]> {
         .select(selectFallback)
         .eq("is_active", true)
         .order("slug", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, to);
       if (fallback.error) throw fallback.error;
       const chunk = (fallback.data as CatalogProductRowLite[] | null) || [];

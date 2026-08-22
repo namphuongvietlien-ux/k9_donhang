@@ -51,6 +51,7 @@ import {
 import { getPackingSaveBanner, normalizeOrderCodeText } from "@/lib/packingWindows";
 import {
   filterCatalogSuggestions,
+  resolveCatalogScan,
   scoreCatalogItem,
 } from "@/lib/catalogSearch";
 import { checkCatalogAddBlocked } from "@/lib/catalogAddGuards";
@@ -322,17 +323,11 @@ export default function BanKemDvPanel() {
     return filterCatalogSuggestions(catalogList, scan, 12);
   }, [scan, catalogList, invoiceLocked]);
 
-  const exactHit = useMemo(() => {
-    const q = normalizeOrderCodeText(scan.trim());
-    if (!q) return null;
-    const hits = catalogList.filter((p) => {
-      const bc = normalizeOrderCodeText(p.barcode || "");
-      const bc2 = normalizeOrderCodeText(p.barcode_2 || "");
-      const slug = normalizeOrderCodeText(p.slug);
-      return (bc && bc === q) || (bc2 && bc2 === q) || (slug && slug === q);
-    });
-    return hits.length === 1 ? hits[0] : null;
-  }, [scan, catalogList]);
+  /** Mã hàng thắng mã vạch; mã vạch dùng chung nhiều mã hàng → bắt chọn tay */
+  const exactScan = useMemo(
+    () => resolveCatalogScan(catalogList, scan),
+    [scan, catalogList],
+  );
 
   const qtyErrors = useMemo(
     () => lines.filter((l) => !(l.quantity > 0)).map((l) => l.key),
@@ -461,8 +456,16 @@ export default function BanKemDvPanel() {
       lockInvoice();
       return;
     }
-    if (exactHit) {
-      addProduct(exactHit);
+    if (exactScan.ambiguous) {
+      toast({
+        title: "Mã vạch đang gắn cho nhiều mã hàng",
+        description: `${scan.trim()} → ${exactScan.skus.join(", ")}. Chọn đúng mã hàng trong gợi ý.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    if (exactScan.hit) {
+      addProduct(exactScan.hit);
       return;
     }
     if (suggestions[0] && scoreCatalogItem(suggestions[0], scan) >= 1200) {

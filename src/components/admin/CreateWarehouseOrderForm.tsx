@@ -22,6 +22,7 @@ import { downloadImportTemplate } from "@/lib/importTemplates";
 import { exportKiotVietTransferFile } from "@/lib/transferExportTemplate";
 import {
   filterCatalogSuggestions,
+  resolveCatalogScan,
   scoreCatalogItem,
 } from "@/lib/catalogSearch";
 import { checkCatalogAddBlocked } from "@/lib/catalogAddGuards";
@@ -289,22 +290,26 @@ const CreateWarehouseOrderForm = forwardRef<
 
   const skuUnitIndex = useSkuUnitIndex(catalogList as CatalogProductRow[]);
 
+  // Lọc mã vạch chặt (exact / prefix) đã nằm trong filterCatalogSuggestions —
+  // không vá lại ở tầng form để hai nơi không lệch nhau.
   const suggestions = useMemo(
     () => filterCatalogSuggestions(catalogList, scan, 12),
     [scan, catalogList],
   );
 
-  const exactScanHit = useMemo(() => {
-    const q = normalizeOrderCodeText(scan.trim());
-    if (!q) return null;
-    const hits = catalogList.filter((p) => {
-      const bc = normalizeOrderCodeText(p.barcode || "");
-      const bc2 = normalizeOrderCodeText(p.barcode_2 || "");
-      const slug = normalizeOrderCodeText(p.slug);
-      return (bc && bc === q) || (bc2 && bc2 === q) || (slug && slug === q);
+  /** Khớp tuyệt đối: mã hàng trước, mã vạch sau, mã vạch dùng chung → ambiguous */
+  const exactScan = useMemo(
+    () => resolveCatalogScan(catalogList, scan),
+    [scan, catalogList],
+  );
+
+  const warnAmbiguousBarcode = (raw: string, skus: string[]) => {
+    toast({
+      title: "Mã vạch đang gắn cho nhiều mã hàng",
+      description: `${raw} → ${skus.join(", ")}. Chọn đúng mã hàng trong danh sách gợi ý.`,
+      variant: "destructive",
     });
-    return hits.length === 1 ? hits[0] : null;
-  }, [scan, catalogList]);
+  };
 
   const totalQty = useMemo(
     () => lines.reduce((s, l) => s + l.quantity, 0),
@@ -390,17 +395,19 @@ const CreateWarehouseOrderForm = forwardRef<
     addBySlugOrBarcode: (slug, barcode) => {
       const s = normalizeOrderCodeText(slug || "");
       const b = normalizeOrderCodeText(barcode || "");
-      const hit =
-        catalogList.find(
-          (p) => s && normalizeOrderCodeText(p.slug) === s,
-        ) ||
-        catalogList.find((p) => {
-          if (!b) return false;
-          return (
-            normalizeOrderCodeText(p.barcode || "") === b ||
-            normalizeOrderCodeText(p.barcode_2 || "") === b
-          );
-        });
+      const bySlug = s ? resolveCatalogScan(catalogList, s) : null;
+      let hit = bySlug?.hit || undefined;
+      if (!hit && b) {
+        const byBarcode = resolveCatalogScan(catalogList, b);
+        // Mã vạch dùng chung nhiều mã hàng → không đoán, bắt chọn tay
+        if (byBarcode.ambiguous) {
+          warnAmbiguousBarcode(String(barcode || ""), byBarcode.skus);
+          setScan(String(barcode || ""));
+          scanRef.current?.focus();
+          return false;
+        }
+        hit = byBarcode.hit || undefined;
+      }
       if (!hit) {
         toast({
           title: "Không tìm thấy mã",
@@ -460,8 +467,12 @@ const CreateWarehouseOrderForm = forwardRef<
     e.preventDefault();
     const raw = scan.trim();
     if (!raw) return;
-    if (exactScanHit) {
-      addProduct(exactScanHit, raw);
+    if (exactScan.ambiguous) {
+      warnAmbiguousBarcode(raw, exactScan.skus);
+      return;
+    }
+    if (exactScan.hit) {
+      addProduct(exactScan.hit, raw);
       return;
     }
     if (suggestions.length === 1) {

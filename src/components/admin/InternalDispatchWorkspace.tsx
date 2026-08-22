@@ -10,7 +10,10 @@ import {
   notifyInternalDispatchTelegram,
   type TelegramNotifyResult,
 } from "@/lib/telegramNotify";
-import { filterCatalogSuggestions } from "@/lib/catalogSearch";
+import {
+  filterCatalogSuggestions,
+  type CatalogSearchItem,
+} from "@/lib/catalogSearch";
 import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import { ProductSearchInput } from "@/components/admin/ProductSearchInput";
 import { Button } from "@/components/ui/button";

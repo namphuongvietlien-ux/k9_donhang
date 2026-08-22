@@ -84,7 +84,10 @@ export function useNewProducts(limit = NEW_PRODUCTS_DEFAULT_LIMIT) {
         .eq("is_active", true)
         .eq("is_new", true)
         .eq("is_out_stock", false)
+        // created_at trùng nhau rất nhiều (import hàng loạt) → cần khóa phụ id
+        // để thứ tự ổn định giữa các lần fetch
         .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
         .limit(lim);
 
       if (adminQ.error && /parent_sku|is_new|is_out_stock/i.test(adminQ.error.message || "")) {
@@ -93,6 +96,7 @@ export function useNewProducts(limit = NEW_PRODUCTS_DEFAULT_LIMIT) {
           .select("id, name, slug, barcode, unit, created_at")
           .eq("is_active", true)
           .order("created_at", { ascending: false })
+          .order("id", { ascending: true })
           .limit(lim);
         if (fallback.error) throw fallback.error;
         return ((fallback.data as ProductFlagRow[]) || []).map((p, i) =>
@@ -113,6 +117,7 @@ export function useNewProducts(limit = NEW_PRODUCTS_DEFAULT_LIMIT) {
         .eq("is_active", true)
         .eq("is_out_stock", false)
         .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
         .limit(lim + excludeIds.size + 5);
 
       if (!fillQ.error) {
@@ -168,19 +173,37 @@ function mapFlagRow(p: ProductFlagRow): CatalogFlagAdminItem {
   };
 }
 
+/** Mã vạch phải khớp exact hoặc từ ký tự đầu (>= 6 ký tự) */
+const BARCODE_PREFIX_MIN = 6;
+
+/**
+ * Lọc danh mục cho FlagManager / OutStock.
+ *
+ * Trước đây gộp mã hàng + MÃ VẠCH + parent vào một chuỗi rồi `includes()`:
+ * gõ/quét một đoạn số trùng phần giữa hoặc đuôi mã vạch của SP khác là ra
+ * ngay SP đó → dễ báo hết hàng / khóa sai mã. Nay tách từng trường:
+ * mã hàng & parent & tên vẫn cho chứa chuỗi, mã vạch thì exact/prefix.
+ */
 function matchesFlagQuery(it: CatalogFlagAdminItem, q: string) {
   const raw = q.trim();
   if (!raw) return true;
   const nq = normalizeOrderCodeText(raw);
   const qf = foldText(raw);
-  const hay = `${it.maHang} ${it.maVach} ${it.tenHang} ${it.parentSku}`;
-  const hayN = normalizeOrderCodeText(`${it.maHang} ${it.maVach} ${it.parentSku}`);
-  const hayF = foldText(hay);
-  return (
-    hay.toLowerCase().includes(raw.toLowerCase()) ||
-    (!!nq && hayN.includes(nq)) ||
-    (!!qf && hayF.includes(qf))
-  );
+  const maVach = normalizeOrderCodeText(it.maVach || "");
+
+  if (nq) {
+    if (it.maHang && it.maHang.includes(nq)) return true;
+    if (it.parentSku && it.parentSku.includes(nq)) return true;
+    if (
+      maVach &&
+      (maVach === nq ||
+        (nq.length >= BARCODE_PREFIX_MIN && maVach.startsWith(nq)))
+    ) {
+      return true;
+    }
+  }
+
+  return !!qf && foldText(it.tenHang || "").includes(qf);
 }
 
 /** Tải toàn bộ SP active (phân trang 1000 — tránh mất kết quả tìm kiếm). */
@@ -199,6 +222,7 @@ async function fetchCatalogFlagRows(query: string, _limit = 8000) {
         .select(selectFull)
         .eq("is_active", true)
         .order("slug", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, to);
 
       if (
@@ -220,7 +244,9 @@ async function fetchCatalogFlagRows(query: string, _limit = 8000) {
       .from("products")
       .select(selectFallback)
       .eq("is_active", true)
+      // Khóa phụ duy nhất — tránh lệch trang khi slug rỗng/trùng
       .order("slug", { ascending: true })
+      .order("id", { ascending: true })
       .range(from, to);
     if (fb.error) throw fb.error;
     const chunk = (fb.data as ProductFlagRow[]) || [];

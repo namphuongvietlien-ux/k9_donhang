@@ -27,6 +27,13 @@ export interface StockOnHandRow {
 }
 
 const PAGE = 1000;
+
+/**
+ * Mọi query phân trang bên dưới phải order kèm `id` (khóa duy nhất).
+ * `product_id` KHÔNG duy nhất trong stock_on_hand (mỗi SP có nhiều dòng theo
+ * unit_key), nên nếu chỉ order theo product_id thì Postgres tự do sắp xếp các
+ * dòng bằng nhau → ranh giới trang bị lệch, mất/nhân đôi tồn kho.
+ */
 const ID_CHUNK = 200;
 
 /** Tồn Q7 không âm — hiển thị & map luôn >= 0 */
@@ -97,6 +104,7 @@ async function fetchAllStockOnHandFlat(
       .select("product_id, quantity, warehouse_id, unit, unit_key")
       .eq("warehouse_id", warehouseId)
       .order("product_id", { ascending: true })
+      .order("id", { ascending: true })
       .range(from, to);
 
     if (withUnit.error && /unit_key|column.*unit/i.test(withUnit.error.message || "")) {
@@ -105,6 +113,7 @@ async function fetchAllStockOnHandFlat(
         .select("product_id, quantity, warehouse_id")
         .eq("warehouse_id", warehouseId)
         .order("product_id", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, to);
       if (legacy.error) throw legacy.error;
       const chunk = (legacy.data as FlatStock[] | null) ?? [];
@@ -144,6 +153,7 @@ async function fetchAllStockOnHandNested(
       )
       .eq("warehouse_id", warehouseId)
       .order("product_id", { ascending: true })
+      .order("id", { ascending: true })
       .range(from, to);
 
     const errMsg = full.error?.message || "";
@@ -160,6 +170,7 @@ async function fetchAllStockOnHandNested(
         )
         .eq("warehouse_id", warehouseId)
         .order("product_id", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, to);
       if (fallback.error) throw fallback.error;
       const chunk = (fallback.data as NestedStock[] | null) ?? [];

@@ -89,7 +89,12 @@ export function useProducts() {
             is_out_stock,
             is_locked
           `)
+          // Bắt buộc có khóa phụ DUY NHẤT (id): `name` bị trùng ở ~2.7k dòng,
+          // phân trang theo cột không duy nhất làm Postgres trả thứ tự khác nhau
+          // giữa các trang → mất dòng ở ranh giới trang (VD mất hẳn TAC1073,
+          // khiến quét mã vạch 8850477016996 ra nhầm SKU khác).
           .order("name", { ascending: true })
+          .order("id", { ascending: true })
           .range(from, from + step - 1);
 
         if (error) {

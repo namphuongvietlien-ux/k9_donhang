@@ -47,7 +47,7 @@ import {
   barcodeForUnit,
   type CatalogProductRow,
 } from "@/lib/catalogUnitBarcode";
-import { filterCatalogSuggestions } from "@/lib/catalogSearch";
+import { filterCatalogSuggestions, resolveCatalogScan } from "@/lib/catalogSearch";
 import { checkCatalogAddBlocked } from "@/lib/catalogAddGuards";
 import {
   CatalogSuggestItem,
@@ -196,21 +196,11 @@ export default function WarehouseOrderDetail({
     [catalogList],
   );
 
-  const suggestions = useMemo(() => {
-    const raw = filterCatalogSuggestions(catalogList, scan, 12);
-    const q = normalizeOrderCodeText(scan.trim());
-    if (!q) return raw;
-    return raw.filter((item) => {
-      const bc = normalizeOrderCodeText(item.barcode || "");
-      const bc2 = normalizeOrderCodeText(item.barcode_2 || "");
-      const strictMatch = (bc && (bc === q || bc.startsWith(q))) || (bc2 && (bc2 === q || bc2.startsWith(q)));
-      const substringOnly = !strictMatch && ((bc && bc.includes(q)) || (bc2 && bc2.includes(q)));
-      if (substringOnly) {
-        return normalizeOrderCodeText(item.name || "").includes(q) || normalizeOrderCodeText(item.slug || "").includes(q);
-      }
-      return true;
-    });
-  }, [scan, catalogList]);
+  // Mã vạch chỉ khớp exact/prefix — quy tắc nằm trong filterCatalogSuggestions.
+  const suggestions = useMemo(
+    () => filterCatalogSuggestions(catalogList, scan, 12),
+    [scan, catalogList],
+  );
 
   const addUnitOptions = useMemo(
     () => getSkuUnitOptions(skuUnitIndex, newSlug),
@@ -557,16 +547,21 @@ export default function WarehouseOrderDetail({
       return;
     }
 
-    const exact = catalogList.filter((p) => {
-      const bc = normalizeOrderCodeText(p.barcode || "");
-      const bc2 = normalizeOrderCodeText(p.barcode_2 || "");
-      const slug = normalizeOrderCodeText(p.slug);
-      return (bc && bc === q) || (bc2 && bc2 === q) || (slug && slug === q);
-    });
-    if (exact.length === 1) {
-      const payload = payloadFromHit(exact[0], scan.trim());
+    const exact = resolveCatalogScan(catalogList, q);
+    // Mã vạch gắn cho nhiều mã hàng → không đoán hộ, mở gợi ý cho user chọn
+    if (exact.ambiguous) {
+      setSuggestOpen(true);
+      toast({
+        title: "Mã vạch đang gắn cho nhiều mã hàng",
+        description: `${q} → ${exact.skus.join(", ")}. Chọn đúng mã hàng trong gợi ý.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    if (exact.hit) {
+      const payload = payloadFromHit(exact.hit, scan.trim());
       if (!payload) return;
-      pickProduct(exact[0], scan.trim());
+      pickProduct(exact.hit, scan.trim());
       void handleAdd(payload);
       return;
     }
