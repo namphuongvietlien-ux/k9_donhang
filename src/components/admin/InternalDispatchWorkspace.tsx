@@ -11,6 +11,7 @@ import {
   type TelegramNotifyResult,
 } from "@/lib/telegramNotify";
 import { filterCatalogSuggestions } from "@/lib/catalogSearch";
+import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import { ProductSearchInput } from "@/components/admin/ProductSearchInput";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,8 +23,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useToast } from "@/hooks/use-toast";
 
 type DispatchItem = { id?: string; line_no: number; product_id: string | null; product_code: string; product_name: string; unit: string | null; quantity: number; notes: string | null };
-type Dispatch = { id: string; dispatch_code: string; status: string; requested_at: string; requested_by: string; notes: string | null; warehouses: { code: string; name: string } | null; internal_dispatch_items: DispatchItem[] };
-type WeeklyOrder = { id: string; week_start: string; status: string; internal_weekly_items: DispatchItem[] };
+type WarehouseRef = { code: string; name: string; short_name?: string | null } | null;
+type Dispatch = { id: string; dispatch_code: string; status: string; requested_at: string; requested_by: string; notes: string | null; warehouses: WarehouseRef; internal_dispatch_items: DispatchItem[] };
+/** Đơn chi nhánh đã được gộp vào đơn tuần — nguồn để phân loại chi nhánh nào xuất. */
+type WeeklyDispatchLink = {
+  internal_dispatches: {
+    dispatch_code: string;
+    requested_at: string;
+    warehouses: WarehouseRef;
+    internal_dispatch_items: DispatchItem[];
+  } | null;
+};
+type WeeklyOrder = { id: string; week_start: string; status: string; internal_weekly_items: DispatchItem[]; weekly_order_dispatches?: WeeklyDispatchLink[] };
 type DraftLine = Omit<DispatchItem, "id" | "line_no">;
 
 const statusLabel: Record<string, string> = {
@@ -31,23 +42,78 @@ const statusLabel: Record<string, string> = {
   open: "Đang gom", printed: "Đã in",
 };
 
+/** Khóa gộp giống RPC approve (weekly_order_id, product_code, unit). */
+const weeklySkuKey = (code: string | null | undefined, unit: string | null | undefined) =>
+  `${String(code || "").trim().toUpperCase()}|${String(unit || "").trim().toLowerCase()}`;
+
+/**
+ * Đơn tuần gộp SL theo mã hàng nên mất dấu chi nhánh. Dựng lại phân loại từ
+ * weekly_order_dispatches → internal_dispatches → items.
+ */
+function buildWeeklyBranchBreakdown(weekly: WeeklyOrder) {
+  const perSku = new Map<string, Map<string, number>>();
+  const detailRows: Record<string, string | number>[] = [];
+
+  for (const link of weekly.weekly_order_dispatches || []) {
+    const dispatch = link?.internal_dispatches;
+    if (!dispatch) continue;
+    const branch = warehouseShortLabel(dispatch.warehouses);
+    for (const item of dispatch.internal_dispatch_items || []) {
+      const key = weeklySkuKey(item.product_code, item.unit);
+      if (!perSku.has(key)) perSku.set(key, new Map());
+      const byBranch = perSku.get(key)!;
+      byBranch.set(branch, (byBranch.get(branch) || 0) + Number(item.quantity || 0));
+      detailRows.push({
+        "Tuần từ ngày": weekly.week_start,
+        "Chi nhánh": branch,
+        "Mã đơn": dispatch.dispatch_code,
+        "Ngày gửi": dispatch.requested_at ? new Date(dispatch.requested_at).toLocaleString("vi-VN") : "",
+        "Mã hàng": item.product_code,
+        "Tên hàng": item.product_name,
+        "ĐVT": item.unit || "",
+        "Số lượng": Number(item.quantity || 0),
+      });
+    }
+  }
+  return { perSku, detailRows };
+}
+
 function exportHistory(dispatches: Dispatch[], weeklyOrders: WeeklyOrder[]) {
   const dispatchRows = dispatches.flatMap((dispatch) => dispatch.internal_dispatch_items.map((item) => ({
-    "Mã đơn": dispatch.dispatch_code, "Chi nhánh": dispatch.warehouses?.code || "", "Trạng thái": statusLabel[dispatch.status] || dispatch.status,
+    "Mã đơn": dispatch.dispatch_code, "Chi nhánh": warehouseShortLabel(dispatch.warehouses), "Trạng thái": statusLabel[dispatch.status] || dispatch.status,
     "Ngày gửi": new Date(dispatch.requested_at).toLocaleString("vi-VN"), "STT": item.line_no, "Mã hàng": item.product_code,
     "Tên hàng": item.product_name, "ĐVT": item.unit || "", "Số lượng": item.quantity, "Ghi chú đơn": dispatch.notes || "", "Ghi chú dòng": item.notes || "",
   })));
-  const weeklyRows = weeklyOrders.flatMap((weekly) => weekly.internal_weekly_items.map((item) => ({
-    "Tuần từ ngày": weekly.week_start, "Trạng thái": statusLabel[weekly.status] || weekly.status, "STT": item.line_no,
-    "Mã hàng": item.product_code, "Tên hàng": item.product_name, "ĐVT": item.unit || "", "Tổng số lượng": item.quantity,
-  })));
+
+  const breakdowns = new Map(weeklyOrders.map((weekly) => [weekly.id, buildWeeklyBranchBreakdown(weekly)]));
+
+  const weeklyRows = weeklyOrders.flatMap((weekly) => {
+    const perSku = breakdowns.get(weekly.id)?.perSku;
+    return weekly.internal_weekly_items.map((item) => {
+      const byBranch = perSku?.get(weeklySkuKey(item.product_code, item.unit));
+      const parts = byBranch
+        ? [...byBranch.entries()].sort((a, b) => b[1] - a[1]).map(([branch, qty]) => `${branch}: ${qty}`)
+        : [];
+      return {
+        "Tuần từ ngày": weekly.week_start, "Trạng thái": statusLabel[weekly.status] || weekly.status, "STT": item.line_no,
+        "Mã hàng": item.product_code, "Tên hàng": item.product_name, "ĐVT": item.unit || "", "Tổng số lượng": item.quantity,
+        "Chi nhánh xuất (SL)": parts.join(" · ") || "—", "Số chi nhánh": byBranch?.size || 0,
+      };
+    });
+  });
+
+  const branchRows = weeklyOrders.flatMap((weekly) => breakdowns.get(weekly.id)?.detailRows || []);
+
   const workbook = XLSX.utils.book_new();
   const dispatchSheet = XLSX.utils.json_to_sheet(dispatchRows);
   const weeklySheet = XLSX.utils.json_to_sheet(weeklyRows);
+  const branchSheet = XLSX.utils.json_to_sheet(branchRows);
   dispatchSheet["!cols"] = [{ wch: 20 }, { wch: 14 }, { wch: 20 }, { wch: 20 }, { wch: 8 }, { wch: 18 }, { wch: 36 }, { wch: 10 }, { wch: 14 }, { wch: 26 }, { wch: 26 }];
-  weeklySheet["!cols"] = [{ wch: 16 }, { wch: 16 }, { wch: 8 }, { wch: 18 }, { wch: 36 }, { wch: 10 }, { wch: 16 }];
+  weeklySheet["!cols"] = [{ wch: 16 }, { wch: 16 }, { wch: 8 }, { wch: 18 }, { wch: 36 }, { wch: 10 }, { wch: 16 }, { wch: 40 }, { wch: 14 }];
+  branchSheet["!cols"] = [{ wch: 16 }, { wch: 14 }, { wch: 22 }, { wch: 20 }, { wch: 18 }, { wch: 36 }, { wch: 10 }, { wch: 12 }];
   XLSX.utils.book_append_sheet(workbook, dispatchSheet, "Lịch sử xuất nội bộ");
   XLSX.utils.book_append_sheet(workbook, weeklySheet, "Đơn tuần");
+  XLSX.utils.book_append_sheet(workbook, branchSheet, "Đơn tuần theo chi nhánh");
   XLSX.writeFile(workbook, `lich-su-xuat-noi-bo-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
@@ -68,7 +134,7 @@ export default function InternalDispatchWorkspace() {
     queryKey: ["internal-dispatches"],
     queryFn: async () => {
       const { data, error } = await (supabase.from("internal_dispatches" as never) as any)
-        .select("id, dispatch_code, status, requested_at, requested_by, notes, warehouses:warehouse_id(code,name), internal_dispatch_items(id,line_no,product_id,product_code,product_name,unit,quantity,notes)")
+        .select("id, dispatch_code, status, requested_at, requested_by, notes, warehouses:warehouse_id(code,name,short_name), internal_dispatch_items(id,line_no,product_id,product_code,product_name,unit,quantity,notes)")
         .order("requested_at", { ascending: false }).limit(200);
       if (error) throw error;
       return (data || []) as Dispatch[];
@@ -79,7 +145,7 @@ export default function InternalDispatchWorkspace() {
     enabled: canManage,
     queryFn: async () => {
       const { data, error } = await (supabase.from("weekly_orders" as never) as any)
-        .select("id,week_start,status,weekly_order_items(id,line_no,product_id,product_code,product_name,unit,quantity)")
+        .select("id,week_start,status,weekly_order_items(id,line_no,product_id,product_code,product_name,unit,quantity),weekly_order_dispatches(internal_dispatches:dispatch_id(dispatch_code,requested_at,warehouses:warehouse_id(code,name,short_name),internal_dispatch_items(line_no,product_code,product_name,unit,quantity)))")
         .order("week_start", { ascending: false }).limit(30);
       if (error) throw error;
       return (data || []).map((row: any) => ({ ...row, internal_weekly_items: row.weekly_order_items || [] })) as WeeklyOrder[];
@@ -198,7 +264,7 @@ export default function InternalDispatchWorkspace() {
 
   const availableProducts = useMemo(() => products.filter((product) => product.is_active !== false && product.slug), [products]);
   const productSuggestions = useMemo(
-    () => filterCatalogSuggestions(availableProducts, productSearch, 12),
+    () => filterCatalogSuggestions(availableProducts as unknown as CatalogSearchItem[], productSearch, 12),
     [availableProducts, productSearch],
   );
   const addProduct = () => {
@@ -219,6 +285,19 @@ export default function InternalDispatchWorkspace() {
     (sum, item) => sum + Number(item.quantity || 0),
     0,
   ) || 0;
+  /** Đơn tuần gộp theo mã hàng — dựng lại "chi nhánh nào xuất" để admin xem trực tiếp. */
+  const weeklyBranchBySku = useMemo(
+    () => (currentWeekly ? buildWeeklyBranchBreakdown(currentWeekly).perSku : new Map<string, Map<string, number>>()),
+    [currentWeekly],
+  );
+  const branchCellText = (item: DispatchItem) => {
+    const byBranch = weeklyBranchBySku.get(weeklySkuKey(item.product_code, item.unit));
+    if (!byBranch?.size) return "—";
+    return [...byBranch.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([branch, qty]) => `${branch}: ${qty}`)
+      .join(" · ");
+  };
   const linkTelegram = async () => {
     setIsLinkingTelegram(true);
     try {
@@ -246,7 +325,7 @@ export default function InternalDispatchWorkspace() {
 
     <Card className="print:hidden"><CardHeader><CardTitle className="text-lg">Đơn xuất nội bộ</CardTitle></CardHeader><CardContent><div className="overflow-x-auto border rounded-md"><Table><TableHeader><TableRow><TableHead>Mã đơn</TableHead><TableHead>Chi nhánh</TableHead><TableHead>Ngày gửi</TableHead><TableHead>Trạng thái</TableHead><TableHead>Dòng hàng</TableHead>{canManage && <TableHead className="text-right">Thao tác</TableHead>}</TableRow></TableHeader><TableBody>{isLoading ? <TableRow><TableCell colSpan={6} className="py-8 text-center"><Loader2 className="inline h-4 w-4 animate-spin" /></TableCell></TableRow> : dispatches.map((dispatch) => <TableRow key={dispatch.id}><TableCell className="font-mono text-xs">{dispatch.dispatch_code}</TableCell><TableCell>{dispatch.warehouses?.code || "—"}</TableCell><TableCell>{new Date(dispatch.requested_at).toLocaleDateString("vi-VN")}</TableCell><TableCell><Badge variant="secondary">{statusLabel[dispatch.status] || dispatch.status}</Badge></TableCell><TableCell>{dispatch.internal_dispatch_items.length}</TableCell>{canManage && <TableCell className="text-right">{dispatch.status === "pending_manager" && <div className="inline-flex gap-2"><Button size="sm" onClick={() => approveMutation.mutate(dispatch)} disabled={approveMutation.isPending || rejectMutation.isPending}><Check className="mr-1 h-4 w-4" />Duyệt</Button><Button size="sm" variant="destructive" onClick={() => { if (confirm(`Không duyệt đơn ${dispatch.dispatch_code}?`)) rejectMutation.mutate(dispatch); }} disabled={approveMutation.isPending || rejectMutation.isPending}><X className="mr-1 h-4 w-4" />Không duyệt</Button></div>}</TableCell>}</TableRow>)}</TableBody></Table></div></CardContent></Card>
 
-    {canManage && <Card className="print:hidden"><CardHeader className="flex-row items-center justify-between"><div><CardTitle className="text-lg">Đơn tuần {currentWeekly ? `từ ${currentWeekly.week_start}` : ""}</CardTitle><p className="mt-1 text-sm text-muted-foreground">Danh sách hàng đã cộng dồn theo mã hàng.</p></div>{currentWeekly && <div className="flex gap-2"><Button variant="outline" onClick={() => printMutation.mutate(currentWeekly)} disabled={printMutation.isPending}><Printer className="mr-2 h-4 w-4" />In phiếu</Button>{canComplete && currentWeekly.status !== "processed" && <Button onClick={() => completeMutation.mutate(currentWeekly)} disabled={completeMutation.isPending}><Check className="mr-2 h-4 w-4" />Xác nhận đã xử lý</Button>}</div>}</CardHeader><CardContent>{currentWeekly ? <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>STT</TableHead><TableHead>Mã hàng</TableHead><TableHead>Tên hàng</TableHead><TableHead>ĐVT</TableHead><TableHead className="text-right">Tổng SL</TableHead></TableRow></TableHeader><TableBody>{currentWeekly.internal_weekly_items.map((item) => <TableRow key={item.id || item.line_no}><TableCell>{item.line_no}</TableCell><TableCell className="font-mono text-xs">{item.product_code}</TableCell><TableCell>{item.product_name}</TableCell><TableCell>{item.unit || "—"}</TableCell><TableCell className="text-right tabular-nums">{item.quantity}</TableCell></TableRow>)}</TableBody></Table></div> : <p className="py-6 text-sm text-muted-foreground">Chưa có đơn tuần được tạo.</p>}</CardContent></Card>}
+    {canManage && <Card className="print:hidden"><CardHeader className="flex-row items-center justify-between"><div><CardTitle className="text-lg">Đơn tuần {currentWeekly ? `từ ${currentWeekly.week_start}` : ""}</CardTitle><p className="mt-1 text-sm text-muted-foreground">Danh sách hàng đã cộng dồn theo mã hàng.</p></div>{currentWeekly && <div className="flex gap-2"><Button variant="outline" onClick={() => printMutation.mutate(currentWeekly)} disabled={printMutation.isPending}><Printer className="mr-2 h-4 w-4" />In phiếu</Button>{canComplete && currentWeekly.status !== "processed" && <Button onClick={() => completeMutation.mutate(currentWeekly)} disabled={completeMutation.isPending}><Check className="mr-2 h-4 w-4" />Xác nhận đã xử lý</Button>}</div>}</CardHeader><CardContent>{currentWeekly ? <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>STT</TableHead><TableHead>Mã hàng</TableHead><TableHead>Tên hàng</TableHead><TableHead>ĐVT</TableHead><TableHead className="text-right">Tổng SL</TableHead><TableHead>Chi nhánh xuất (SL)</TableHead></TableRow></TableHeader><TableBody>{currentWeekly.internal_weekly_items.map((item) => <TableRow key={item.id || item.line_no}><TableCell>{item.line_no}</TableCell><TableCell className="font-mono text-xs">{item.product_code}</TableCell><TableCell>{item.product_name}</TableCell><TableCell>{item.unit || "—"}</TableCell><TableCell className="text-right tabular-nums">{item.quantity}</TableCell><TableCell className="text-xs text-muted-foreground">{branchCellText(item)}</TableCell></TableRow>)}</TableBody></Table></div> : <p className="py-6 text-sm text-muted-foreground">Chưa có đơn tuần được tạo.</p>}</CardContent></Card>}
 
     {canManage && currentWeekly ? <section className="internal-weekly-print hidden print:block">
       <header className="internal-weekly-print__header">

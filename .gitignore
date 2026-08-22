@@ -39,3 +39,6 @@ dist-ssr
 
 # Cache incremental của `tsc -b` (lệnh typecheck thật)
 *.tsbuildinfo
+
+.vercel
+.env*

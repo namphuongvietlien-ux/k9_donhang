@@ -45,8 +45,15 @@ export type OrderGridLine = {
   quantity: number;
   productId: string | null;
   stockQty: number | null;
+  /** Đơn giá theo ĐVT đang chọn — đổi ĐVT là syncDraftLineUnit cập nhật lại */
+  price?: number;
   isCustomSku?: boolean;
 };
+
+const vnd = (n: number) =>
+  new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 0 }).format(
+    Number.isFinite(n) ? n : 0,
+  );
 
 export type OrderItemsGridProps = {
   lines: OrderGridLine[];
@@ -95,6 +102,12 @@ export function OrderItemsGrid({
               Tồn
             </TableHead>
             <TableHead className={cn(excelTh, "text-center w-32")}>SL</TableHead>
+            <TableHead className={cn(excelTh, "text-right w-24")}>
+              Đơn giá
+            </TableHead>
+            <TableHead className={cn(excelTh, "text-right w-28 bg-amber-50")}>
+              Thành tiền
+            </TableHead>
             <TableHead className={cn(excelTh, "w-10")} />
           </TableRow>
         </TableHeader>
@@ -102,7 +115,7 @@ export function OrderItemsGrid({
           {lines.length === 0 ? (
             <TableRow>
               <TableCell
-                colSpan={8}
+                colSpan={10}
                 className={cn(
                   excelTd,
                   "text-center text-muted-foreground py-8 h-auto",
@@ -272,6 +285,21 @@ export function OrderItemsGrid({
                         <Plus className="w-3 h-3" />
                       </Button>
                     </div>
+                  </TableCell>
+                  <TableCell
+                    className={cn(excelTd, "text-right tabular-nums text-[13px]")}
+                  >
+                    {Number(l.price) > 0 ? vnd(Number(l.price)) : "—"}
+                  </TableCell>
+                  <TableCell
+                    className={cn(
+                      excelTd,
+                      "text-right tabular-nums font-semibold bg-amber-50/60",
+                    )}
+                  >
+                    {Number(l.price) > 0
+                      ? vnd(Number(l.price) * (Number(l.quantity) || 0))
+                      : "—"}
                   </TableCell>
                   <TableCell className={excelTd}>
                     <Button

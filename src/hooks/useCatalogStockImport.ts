@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import {
   slugFromMaHang,
+  type CatalogStockLine,
   type ParsedCatalogStockImport,
 } from "@/lib/catalogStockImport";
 import { normalizeOrderCodeText } from "@/lib/packingWindows";
@@ -132,6 +133,55 @@ export function useCatalogForImport() {
   });
 }
 
+/** Dòng đã gộp ĐVT cơ sở + ĐVT quy đổi của cùng một mã hàng. */
+type MergedCatalogLine = CatalogStockLine & {
+  unit2?: string | null;
+  barcode2?: string | null;
+  price2?: number | null;
+  unit2Ratio?: number | null;
+};
+
+/**
+ * Gộp các dòng cùng mã hàng: dòng KHÔNG có tỷ lệ quy đổi là ĐVT cơ sở,
+ * dòng CÓ tỷ lệ là ĐVT phụ (unit_2 + barcode_2 + price_2 + unit_2_ratio).
+ */
+export function mergeConversionLines(lines: CatalogStockLine[]): MergedCatalogLine[] {
+  const groups = new Map<string, CatalogStockLine[]>();
+  const order: string[] = [];
+  for (const line of lines) {
+    const key = normalizeOrderCodeText(line.productSlug || line.maHang);
+    if (!key) continue;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      order.push(key);
+    }
+    groups.get(key)!.push(line);
+  }
+
+  return order.map((key) => {
+    const group = groups.get(key)!;
+    const base = group.find((l) => l.tyLeQuyDoi == null) || group[0];
+    const merged: MergedCatalogLine = { ...base };
+
+    if (merged.tonKho == null) {
+      const withStock = group.find((l) => l.tonKho != null);
+      if (withStock) merged.tonKho = withStock.tonKho;
+    }
+
+    const conversion = group.find((l) => l !== base && l.tyLeQuyDoi != null);
+    if (conversion) {
+      merged.unit2 = conversion.dvt || null;
+      merged.barcode2 = conversion.maVach || null;
+      merged.price2 = conversion.price ?? null;
+      merged.unit2Ratio = conversion.tyLeQuyDoi ?? null;
+    } else if (base.tyLeQuyDoi != null) {
+      // File chỉ có dòng quy đổi — giữ làm ĐVT chính, vẫn lưu tỷ lệ.
+      merged.unit2Ratio = base.tyLeQuyDoi;
+    }
+    return merged;
+  });
+}
+
 /** Upsert products in batches — tránh await từng dòng (chậm) */
 async function ensureProducts(
   parsed: ParsedCatalogStockImport,
@@ -141,7 +191,13 @@ async function ensureProducts(
   let created = 0;
   let updated = 0;
 
-  const validLines = parsed.lines.filter((l) => !l.errorNote);
+  const rawValidLines = parsed.lines.filter((l) => !l.errorNote);
+  /**
+   * KiotViet xuất 1 mã hàng thành 2 dòng: dòng gốc (ĐVT cơ sở) + dòng quy đổi
+   * (ĐVT lớn, có Tỷ lệ quy đổi). Không gộp thì dòng sau ghi đè dòng trước và
+   * products.unit thành "Lọ"/"Hộp", mất luôn ĐVT cơ sở.
+   */
+  const validLines = mergeConversionLines(rawValidLines);
   const requestedCodes = [...new Set(validLines.map((l) => (l.productSlug || "").trim()).filter(Boolean))];
 
   // Load existing in chunks of 200 (.in limit)
@@ -167,6 +223,11 @@ async function ensureProducts(
     skipUnitPatch?: boolean;
     /** ĐVT trên dòng file (để gắn barcode / unit_2) */
     lineDvt?: string;
+    /** ĐVT quy đổi từ dòng thứ 2 của cùng mã hàng */
+    unit2?: string | null;
+    barcode2?: string | null;
+    price2?: number | null;
+    unit2Ratio?: number | null;
   }[] = [];
   const toCreateMap = new Map<
     string,
@@ -178,6 +239,10 @@ async function ensureProducts(
       price: number | null;
       parentSku: string;
       isNew: boolean;
+      unit2?: string | null;
+      barcode2?: string | null;
+      price2?: number | null;
+      unit2Ratio?: number | null;
     }
   >();
 
@@ -196,6 +261,10 @@ async function ensureProducts(
           barcode: line.maVach ? line.maVach : null,
           price: line.price ?? null,
           parentSku: line.parentSku || null,
+          unit2: line.unit2 ?? null,
+          barcode2: line.barcode2 ?? null,
+          price2: line.price2 ?? null,
+          unit2Ratio: line.unit2Ratio ?? null,
         });
       } else if (parsed.mode === "stockQ7") {
         if (line.maVach || line.tenHang) {
@@ -225,6 +294,10 @@ async function ensureProducts(
         price: line.price ?? null,
         parentSku: line.parentSku,
         isNew,
+        unit2: line.unit2 ?? null,
+        barcode2: line.barcode2 ?? null,
+        price2: line.price2 ?? null,
+        unit2Ratio: line.unit2Ratio ?? null,
       });
     }
   }
@@ -239,6 +312,11 @@ async function ensureProducts(
         if (u.unit && !u.skipUnitPatch) patch.unit = u.unit;
         if (u.parentSku) patch.parent_sku = u.parentSku;
         if (u.price != null) patch.price = u.price;
+        // ĐVT quy đổi: chỉ ghi khi file có dòng quy đổi, không xóa dữ liệu cũ.
+        if (u.unit2) patch.unit_2 = u.unit2;
+        if (u.barcode2) patch.barcode_2 = u.barcode2;
+        if (u.price2 != null) patch.price_2 = u.price2;
+        if (u.unit2Ratio != null) patch.unit_2_ratio = u.unit2Ratio;
 
         if (u.barcode) {
           const { data: prod } = await supabase
@@ -294,6 +372,10 @@ async function ensureProducts(
       is_new: c.isNew,
       stock_quantity: 0,
       parent_sku: c.parentSku || null,
+      unit_2: c.unit2 || null,
+      barcode_2: c.barcode2 || null,
+      price_2: c.price2 ?? null,
+      unit_2_ratio: c.unit2Ratio ?? null,
       description: c.parentSku
         ? `Import danh mục (Parent: ${c.parentSku})`
         : "Import danh mục từ Excel (GAS catalogFast)",

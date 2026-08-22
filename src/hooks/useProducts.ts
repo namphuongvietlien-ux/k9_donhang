@@ -12,6 +12,10 @@ export interface Product {
   unit_name?: string;
   unit_2?: string | null;
   barcode_2?: string | null;
+  /** 1 unit_2 = unit_2_ratio × unit (KiotViet "Tỷ lệ quy đổi") */
+  unit_2_ratio?: number | null;
+  /** Giá bán riêng của unit_2 — không suy ra từ price × tỷ lệ */
+  price_2?: number | null;
   price?: number;
   original_price?: number | null;
   image_url?: string | null;
@@ -62,6 +66,8 @@ export function useProducts() {
             unit_name,
             unit_2,
             barcode_2,
+            unit_2_ratio,
+            price_2,
             price,
             original_price,
             image_url,

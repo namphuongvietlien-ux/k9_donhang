@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useProducts } from "@/hooks/useProducts";
 import { normalizeOrderCodeText } from "@/lib/packingWindows";
 import {
+  normalizeStockCompositeKey,
   normalizeUnitKey,
   stockCompositeKey,
   stockUnitSuffix,
@@ -313,7 +314,9 @@ function indexStock(rows: StockOnHandRow[]): StockIndex {
   const byBare = new Map<string, StockOnHandRow[]>();
 
   const putComposite = (key: string | null | undefined, row: StockOnHandRow) => {
-    const k = normalizeOrderCodeText(key || "");
+    // Không dùng normalizeOrderCodeText cho cả chuỗi: nó upper luôn phần
+    // `|DV:hop` → lệch với key tra cứu (xem normalizeStockCompositeKey).
+    const k = normalizeStockCompositeKey(key);
     if (!k) return;
     const prev = byComposite.get(k);
     if (prev && prev.source === "stock_on_hand" && row.source === "products") {
@@ -392,15 +395,19 @@ function lookupQty(
   if (unitKey) {
     const hit = index.byComposite.get(bare + stockUnitSuffix(unitKey));
     if (hit) return hit.quantity;
+
+    // Khớp ĐÚNG ĐVT trong byBare phải xét TRƯỚC alias bare: alias bare luôn trỏ
+    // về ĐVT cơ sở, nên hỏi "Thùng" mà trả tồn "Cái" là sai (còn 5 Thùng nhưng
+    // Cái = 0 sẽ bị báo hết hàng).
+    const list = index.byBare.get(bare);
+    const exact = list?.find((r) => r.unitKey === unitKey);
+    if (exact) return exact.quantity;
+
     // Fallback bare (1 dòng không gắn ĐVT hoặc alias primary)
     const bareHit = index.byComposite.get(bare);
     if (bareHit) return bareHit.quantity;
     // Cộng mọi biến thể cùng mã nếu chỉ có rows trong byBare
-    const list = index.byBare.get(bare);
     if (list?.length) {
-      // Nếu có đúng 1 ĐVT khớp sau normalize — lấy cái đó; else sum? GAS: fallback bare then sum
-      const exact = list.find((r) => r.unitKey === unitKey);
-      if (exact) return exact.quantity;
       return list.reduce((s, r) => s + r.quantity, 0);
     }
     return null;
@@ -428,15 +435,14 @@ function lookupRow(
   if (unitKey) {
     const hit = index.byComposite.get(bare + stockUnitSuffix(unitKey));
     if (hit) return hit;
+    // Cùng lý do như lookupQty: ĐVT khớp đúng phải thắng alias bare.
+    const exact = index.byBare.get(bare)?.find((r) => r.unitKey === unitKey);
+    if (exact) return exact;
   }
   const bareHit = index.byComposite.get(bare);
   if (bareHit) return bareHit;
   const list = index.byBare.get(bare);
   if (!list?.length) return null;
-  if (unitKey) {
-    const exact = list.find((r) => r.unitKey === unitKey);
-    if (exact) return exact;
-  }
   return list[0];
 }
 
@@ -459,7 +465,7 @@ export function useStock(warehouseId?: string | null, enabled = true) {
     enabled: enabled && !!warehouseId,
     staleTime: 30_000,
     retry: 1,
-    queryFn: () => loadStockForWarehouse(warehouseId!, products),
+    queryFn: () => loadStockForWarehouse(warehouseId!, products as any),
   });
 
   const index = useMemo(() => indexStock(query.data ?? []), [query.data]);

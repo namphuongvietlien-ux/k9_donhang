@@ -16,6 +16,10 @@ export interface CatalogProductRow {
   barcode_2?: string | null;
   unit_2?: string | null;
   price?: number | null;
+  /** Giá bán theo unit_2 (KiotViet dòng quy đổi) — không suy ra từ price × tỷ lệ */
+  price_2?: number | null;
+  /** 1 unit_2 = unit_2_ratio × unit */
+  unit_2_ratio?: number | null;
   parent_sku?: string | null;
 }
 
@@ -25,7 +29,10 @@ export interface SkuUnitOption {
   barcode: string;
   productId: string;
   name: string;
+  /** Giá bán của CHÍNH ĐVT này (ĐVT lớn có giá riêng, không phải giá cơ sở × tỷ lệ) */
   price: number;
+  /** 1 ĐVT này = ratio ĐVT cơ sở (ĐVT cơ sở = 1) */
+  ratio: number;
   /** Nguồn quy cách: unit chính, unit_2, hoặc mã con */
   source: "unit" | "unit_2" | "child";
 }
@@ -74,24 +81,30 @@ export function expandProductUnitOptions(
 ): SkuUnitOption[] {
   const out: SkuUnitOption[] = [];
   const seen = new Set<string>();
+  const basePrice = Number(p.price) || 0;
   const u1 = normUnit(p.unit) || "cái";
   pushOption(out, seen, {
     unit: u1,
     barcode: String(p.barcode ?? "").trim(),
     productId: p.id,
     name: p.name,
-    price: Number(p.price) || 0,
+    price: basePrice,
+    ratio: 1,
     source: sourceOverride || "unit",
   });
   const u2 = normUnit(p.unit_2);
   if (u2) {
+    const ratio = Number(p.unit_2_ratio) > 0 ? Number(p.unit_2_ratio) : 1;
+    // Ưu tiên giá thật của ĐVT lớn; chỉ khi thiếu mới suy ra bằng giá cơ sở × tỷ lệ.
+    const unit2Price = Number(p.price_2) > 0 ? Number(p.price_2) : basePrice * ratio;
     pushOption(out, seen, {
       unit: u2,
       // Không fallback sang barcode chính — để ĐVT2 có thể trống MV
       barcode: String(p.barcode_2 ?? "").trim(),
       productId: p.id,
       name: p.name,
-      price: Number(p.price) || 0,
+      price: unit2Price,
+      ratio,
       source: sourceOverride === "child" ? "child" : "unit_2",
     });
   }

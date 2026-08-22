@@ -236,10 +236,12 @@ serve(async (req) => {
           "",
           "<b>Chọn thao tác:</b>",
         ].join("\n");
+        // callback_data phải khớp parser của telegram-webhook: dispatch:<action>:<uuid>
+        // ("dispatch:approve:" + 36 ký tự UUID = 53 byte, dưới giới hạn 64 byte của Telegram).
         const keyboard = {
           inline_keyboard: [
-            [{ text: "✅ Duyệt đơn", callback_data: `dispatch:approve:${record.id}` }],
-            [{ text: "❌ Không duyệt", callback_data: `dispatch:reject:${record.id}` }],
+            [{ text: "✅ Chấp nhận", callback_data: `dispatch:approve:${record.id}` }],
+            [{ text: "❌ Từ chối", callback_data: `dispatch:reject:${record.id}` }],
           ],
         };
 

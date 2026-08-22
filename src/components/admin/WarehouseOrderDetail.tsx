@@ -196,10 +196,21 @@ export default function WarehouseOrderDetail({
     [catalogList],
   );
 
-  const suggestions = useMemo(
-    () => filterCatalogSuggestions(catalogList, scan, 12),
-    [scan, catalogList],
-  );
+  const suggestions = useMemo(() => {
+    const raw = filterCatalogSuggestions(catalogList, scan, 12);
+    const q = normalizeOrderCodeText(scan.trim());
+    if (!q) return raw;
+    return raw.filter((item) => {
+      const bc = normalizeOrderCodeText(item.barcode || "");
+      const bc2 = normalizeOrderCodeText(item.barcode_2 || "");
+      const strictMatch = (bc && (bc === q || bc.startsWith(q))) || (bc2 && (bc2 === q || bc2.startsWith(q)));
+      const substringOnly = !strictMatch && ((bc && bc.includes(q)) || (bc2 && bc2.includes(q)));
+      if (substringOnly) {
+        return normalizeOrderCodeText(item.name || "").includes(q) || normalizeOrderCodeText(item.slug || "").includes(q);
+      }
+      return true;
+    });
+  }, [scan, catalogList]);
 
   const addUnitOptions = useMemo(
     () => getSkuUnitOptions(skuUnitIndex, newSlug),

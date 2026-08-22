@@ -19,6 +19,7 @@ import { useWarehouseOrderMutations } from "@/hooks/useWarehouseOrders";
 import type { DuplicatePreSaveResult } from "@/hooks/useOrderImport";
 import type { PhieuLoai } from "@/lib/importOrders";
 import { downloadImportTemplate } from "@/lib/importTemplates";
+import { exportKiotVietTransferFile } from "@/lib/transferExportTemplate";
 import {
   filterCatalogSuggestions,
   scoreCatalogItem,
@@ -141,6 +142,7 @@ function pickOptionForProduct(
     productId: p.id,
     name: p.name,
     price: p.price,
+    ratio: 1,
     source: "unit" as const,
   };
 }
@@ -306,6 +308,15 @@ const CreateWarehouseOrderForm = forwardRef<
 
   const totalQty = useMemo(
     () => lines.reduce((s, l) => s + l.quantity, 0),
+    [lines],
+  );
+  /** Tổng tiền đơn = Σ (SL × đơn giá theo ĐVT đang chọn). */
+  const totalAmount = useMemo(
+    () =>
+      lines.reduce(
+        (s, l) => s + (Number(l.price) || 0) * (Number(l.quantity) || 0),
+        0,
+      ),
     [lines],
   );
 
@@ -798,6 +809,32 @@ const CreateWarehouseOrderForm = forwardRef<
             <Download className="w-4 h-4 mr-2" />
             Mẫu Excel
           </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={lines.length === 0}
+            onClick={() => {
+              const source = warehouses?.find((w) => w.id === sourceWh);
+              exportKiotVietTransferFile(
+                lines.map((l) => ({
+                  maHang: l.maHang,
+                  maVach: l.maVach,
+                  tenHang: l.tenHang,
+                  kho: source?.name || "",
+                  dvt: l.dvt,
+                  soLuong: l.quantity,
+                })),
+              );
+              toast({
+                title: "Đã xuất theo mẫu KiotViet",
+                description:
+                  "Dữ liệu bắt đầu ở dòng 6. Kiểm tra cột Kho phải đúng dạng \"MÃKHO | Tên kho\" trước khi nhập vào KiotViet.",
+              });
+            }}
+          >
+            <Download className="w-4 h-4 mr-2" />
+            Xuất mẫu điều chuyển
+          </Button>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -845,6 +882,17 @@ const CreateWarehouseOrderForm = forwardRef<
         <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
           <div className="text-base font-semibold">
             Tổng cộng: <span className="text-primary">{totalQty}</span> món
+            {totalAmount > 0 ? (
+              <span className="ml-3">
+                · Tổng tiền:{" "}
+                <span className="text-primary tabular-nums">
+                  {new Intl.NumberFormat("vi-VN", {
+                    maximumFractionDigits: 0,
+                  }).format(totalAmount)}
+                </span>{" "}
+                đ
+              </span>
+            ) : null}
           </div>
           <Button
             size="lg"

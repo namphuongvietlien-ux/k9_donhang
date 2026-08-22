@@ -38,8 +38,18 @@ export function normalizeHeaderText(value: unknown): string {
     .replace(/[^a-z0-9]+/g, "");
 }
 
+/**
+ * "Tỷ lệ quy đổi" (KiotViet cột T) là SỐ, không phải tên ĐVT.
+ * Không tách riêng thì `dvt2` ăn điểm 100 vì chứa "quydoi" → ghi 10/30 vào unit_2.
+ */
+export function isImportRatioHeaderNorm(norm: string): boolean {
+  if (!norm) return false;
+  return norm.includes("tyle") || norm.includes("tile");
+}
+
 function isImportDvt2HeaderNorm(norm: string): boolean {
   if (!norm) return false;
+  if (isImportRatioHeaderNorm(norm)) return false;
   if (norm === "dvt2" || norm === "donvi2" || norm === "unit2" || norm === "altunit") return true;
   if (norm.indexOf("quydoi") !== -1) return true;
   if (norm.indexOf("dvtphu") !== -1 || norm.indexOf("donviphu") !== -1) return true;

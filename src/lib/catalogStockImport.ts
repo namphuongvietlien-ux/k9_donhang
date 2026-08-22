@@ -7,6 +7,7 @@
 import {
   findImportHeaderRowIndex,
   isImportJunkDataRow,
+  isImportRatioHeaderNorm,
   mapImportHeaderColumns,
   normalizeHeaderText,
   normalizeImportedMatrix,
@@ -28,6 +29,8 @@ export interface CatalogStockLine {
   dvt: string;
   parentSku: string;
   price: number | null;
+  /** KiotViet cột T — có giá trị nghĩa là dòng ĐVT quy đổi (1 ĐVT này = N ĐVT cơ sở) */
+  tyLeQuyDoi: number | null;
   tonKho: number | null;
   khoRaw: string;
   productSlug: string;
@@ -89,6 +92,22 @@ function findPriceColumn(headerRow: unknown[]): number {
   return best.score >= 80 ? best.idx : -1;
 }
 
+/** Cột "Tỷ lệ quy đổi" — ưu tiên khớp đúng, không lẫn với "Mã đơn vị tính chuyển đổi". */
+function findRatioColumn(headerRow: unknown[]): number {
+  if (!headerRow?.length) return -1;
+  let best = { idx: -1, score: 0 };
+  for (let c = 0; c < headerRow.length; c++) {
+    const norm = normalizeHeaderText(headerRow[c]);
+    if (!norm) continue;
+    let score = 0;
+    if (norm === "tylequydoi" || norm === "tilequydoi") score = 100;
+    else if (isImportRatioHeaderNorm(norm)) score = 95;
+    else if (norm === "hesoquydoi") score = 90;
+    if (score > best.score) best = { idx: c, score };
+  }
+  return best.score >= 90 ? best.idx : -1;
+}
+
 function parsePriceValue(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const text = String(value).trim();
@@ -124,6 +143,7 @@ export function parseCatalogStockMatrix(
   const columns = mapImportHeaderColumns(matrix[headerIndex] || []);
   const khoCol = findKhoColumn(matrix[headerIndex] || []);
   const priceCol = findPriceColumn(matrix[headerIndex] || []);
+  const ratioCol = findRatioColumn(matrix[headerIndex] || []);
 
   if (columns.maHang < 0 && columns.maVach < 0) {
     throw new Error("Không tìm thấy cột Mã hàng / Mã vạch (như file nhập khẩu GAS).");
@@ -164,6 +184,8 @@ export function parseCatalogStockMatrix(
     const parentSku = normalizeProductCode(cell(row, columns.parentSku));
     const khoRaw = String(cell(row, khoCol) ?? "").trim();
     const price = priceCol >= 0 ? parsePriceValue(cell(row, priceCol)) : null;
+    const rawRatio = ratioCol >= 0 ? parsePriceValue(cell(row, ratioCol)) : null;
+    const tyLeQuyDoi = rawRatio != null && rawRatio > 0 ? rawRatio : null;
 
     const tonCol = columns.tonKho >= 0 ? columns.tonKho : columns.soLuong;
     let tonKho: number | null = null;
@@ -197,6 +219,7 @@ export function parseCatalogStockMatrix(
       dvt: dvt || existing?.unit || "cái",
       parentSku,
       price,
+      tyLeQuyDoi,
       tonKho,
       khoRaw,
       productSlug: slug,
