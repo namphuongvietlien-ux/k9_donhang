@@ -318,9 +318,9 @@ export function useWeekOrders(options: {
         .select(
           `
           id, order_code, customer_name, status, created_at,
-          warehouse_id, packing_date, packing_shift, duplicate_accepted,
+          warehouse_id, source_warehouse_id, packing_date, packing_shift, duplicate_accepted,
           warehouse:warehouse_id ( id, code, name, short_name, print_name ),
-          order_items ( id, product_name, product_slug, quantity, price, unit, barcode )
+          order_items ( id, product_name, product_slug, quantity, qty_requested, qty_packed, price, unit, barcode )
         `,
         )
         .gte("created_at", weekStart.toISOString())
@@ -339,9 +339,9 @@ export function useWeekOrders(options: {
           .select(
             `
             id, order_code, customer_name, status, created_at,
-            warehouse_id, packing_date, packing_shift, duplicate_accepted,
-            warehouse:warehouse_id ( id, code, name ),
-            order_items ( id, product_name, product_slug, quantity, price, unit, barcode )
+            warehouse_id, source_warehouse_id, packing_date, packing_shift, duplicate_accepted,
+            warehouse:warehouse_id ( id, code, name, short_name, print_name ),
+            order_items ( id, product_name, product_slug, quantity, qty_requested, qty_packed, price, unit, barcode )
           `,
           )
           .gte("created_at", weekStart.toISOString())

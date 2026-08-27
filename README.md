@@ -1,29 +1,41 @@
-Role: Bạn là một Senior Full-stack Developer chuyên gia gỡ lỗi (Debugging Expert) hệ thống React, TypeScript, Supabase.
-
-Context & Problem:
-
-Hệ thống hiện tại đang gặp lỗi nghiêm trọng trong việc tra cứu và tìm kiếm sản phẩm:
-
-1. Khi người dùng quét mã vạch hoặc gõ một đoạn mã ngắn, hệ thống trả về sản phẩm sai (do logic tìm kiếm cũ dùng `.includes()` lỏng lẻo trên chuỗi barcode, dẫn đến việc quét/gõ số nằm ở đuôi mã vạch dài của sản phẩm khác vẫn bị khớp nhầm).
-
-2. Dù đã áp dụng một số bản vá ở giao diện, nhưng khi deploy lên Production (Vercel) hoặc đồng bộ state, lỗi vẫn tái diễn hoặc tìm ra mã này nhưng ra tên hàng khác. Nguyên nhân có thể do:
-
-   - Các hook tải danh mục sản phẩm (như `useProducts.ts`, `useCatalogStockImport.ts`, v.v.) thiếu thứ tự sắp xếp phụ `.order('id', { ascending: true })`) gây lệch/sót dữ liệu khi phân trang 1000 dòng trên bảng lớn hơn 6500 sản phẩm.
-
-   - Các file form như `CreateWarehouseOrderForm.tsx`, `BanKemDvPanel.tsx`, `WarehouseOrderDetail.tsx`[cite: 1, 2, 4] vẫn còn sót hàm lọc gợi ý `suggestions`) sử dụng cơ chế tìm kiếm chứa chuỗi thô `.includes()`) thay vì bắt buộc khớp chính xác hoặc tiền tố `===` hoặc `startsWith`).
-
-Task yêu cầu bạn thực hiện:
-
-1. Rà soát toàn bộ các file liên quan đến tìm kiếm sản phẩm `catalogSearch.ts`, các form nhập đơn, xuất bán, quản lý kho).
-
-2. Tìm chính xác đoạn code đang gây ra lỗi "gõ mã này ra sản phẩm khác" hoặc "bản vá trước bị ghi đè/không ăn vào code".
-
-3. Viết lại logic lọc mã vạch chuẩn tuyệt đối:
-
-   - Barcode / Barcode_2: Phải ưu tiên khớp tuyệt đối `=== q`) hoặc khớp từ ký tự đầu `startsWith(q)`). 
-
-   - Tuyệt đối KHÔNG dùng `.includes(q)` đơn thuần cho barcode trừ khi tên sản phẩm hoặc SKU thực sự khớp.
-
-4. Kiểm tra lại toàn bộ các hàm phân trang tải danh mục sản phẩm từ Supabase để đảm bảo không bị sót dòng hay lệch dữ liệu do thiếu `.order("id", { ascending: true })`.
-
-5. Trả về mã nguồn hoàn chỉnh, giải thích rõ nguyên nhân cũ và hướng dẫn cách build/deploy lại chính xác.
+[8/22/2026 1:11 PM] xuatluuchuong: 📦 **YÊU CẦU XUẤT NỘI BỘ**  
+Mã đơn: **XNB-260822061156-2045**  
+Người tạo: **k9178@k9.local**  
+• Cửa hàng: **Kho Địa điểm kinh doanh 06 (Q4 Cũ)**  
+178 đường Hoàng Diệu, Phường Khánh Hội, TPHCM  
+  
+• Sản phẩm: TA hỗn hợp hoàn chỉnh (hương vị thịt heo ) cho chó 1 thùng = 100gr x 32 hộp (**8009470013093**)  
+Số lượng: **1 Hộp**  
+• Sản phẩm: Khử Mùi Chuồng Trại FAY Deodor Peppermint - 300ml (**8935113210003**)  
+Số lượng: **1 Chai**  
+  
+**Ghi chú:** xuất monge cho chó chuồng lưu, fay deodor xuất cho pk q4c  
+  
+**Chọn thao tác:**  
+*Nút duyệt chỉ gửi trong Telegram riêng của manager.*  
+[8/22/2026 4:14 PM] xuatluuchuong: 📦 **YÊU CẦU XUẤT NỘI BỘ**  
+Mã đơn: **XNB-260822091359-32C7**  
+Người tạo: **275hd@k9.local**  
+• Cửa hàng: **Kho Địa điểm kinh doanh 01 (Q4 Mới)**  
+L22-24 Cư Xá Vĩnh Hội, đường Hoàng Diệu, phường Khánh Hội, TP Hồ Chí Minh, Việt Nam.  
+  
+• Sản phẩm: Nước hoa thú cưng hương Lavie 30ml (Krill) (**8938556520111**)  
+Số lượng: **1 Chai**  
+  
+**Ghi chú:** xuất grooming 22/08/26  
+  
+**Chọn thao tác:**  
+*Nút duyệt chỉ gửi trong Telegram riêng của manager.*  
+[8/22/2026 6:20 PM] xuatluuchuong: 📦 **YÊU CẦU XUẤT NỘI BỘ**  
+Mã đơn: **XNB-260822112032-2892**  
+Người tạo: **q7@k9.local**  
+• Cửa hàng: **Kho Địa điểm kinh doanh Q7**  
+269A đường Lê Văn Lương, P. Tân Hưng, TP.HCM, Việt Nam  
+  
+• Sản phẩm: B12-ATP - Hộp 6 lọ 5ml (**8936047717323**)  
+Số lượng: **1 ml**  
+  
+**Ghi chú:** xuất lưu chuồng q7  
+  
+**Chọn thao tác:**  
+*Nút duyệt chỉ gửi trong Telegram riêng của manager.*

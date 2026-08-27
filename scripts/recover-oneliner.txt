@@ -1,0 +1,18 @@
+HƯỚNG DẪN GỬI CHI NHÁNH (copy nguyên phần dưới, dán vào Zalo)
+================================================================
+
+GẤP — làm ngay, đừng F5, đừng tắt máy:
+
+1. Vào tab trang kho đang mở (KHÔNG bấm F5, KHÔNG bấm gì trong trang).
+2. Nhấn F12 → chọn tab Console.
+3. Nếu hiện chữ đỏ "Warning: Don't paste code..." thì gõ:  allow pasting  rồi Enter.
+4. Copy đúng 1 dòng dưới đây, dán vào Console, Enter:
+
+(()=>{const h=[document.getElementById("root"),document.body,...document.body.children];let c=null;for(const o of h){if(!o||c)continue;const k=Object.keys(o).find(x=>x.startsWith("__reactContainer$")||x.startsWith("__reactFiber$"));if(!k)continue;const s=new Set(),st=[o[k]];while(st.length){const f=st.pop();if(!f||s.has(f))continue;s.add(f);for(const b of[f.memoizedProps,f.pendingProps]){const q=b&&b.client;if(q&&typeof q.getQueryCache==="function"){c=q;break}}if(c)break;const v=f.memoizedState&&f.memoizedState.memoizedState;if(v&&typeof v.getQueryCache==="function"){c=v;break}if(f.child)st.push(f.child);if(f.sibling)st.push(f.sibling);if(s.size>2e5)break}}if(!c){alert("KHONG TIM THAY DU LIEU - tab nay da F5 hoac khong phai trang kho");return}const a=c.getQueryCache().getAll().map(q=>({queryKey:q.queryKey,dataUpdatedAt:q.state&&q.state.dataUpdatedAt,dataUpdatedAtISO:q.state&&q.state.dataUpdatedAt?new Date(q.state.dataUpdatedAt).toISOString():null,data:q.state&&q.state.data}));let n=0,l=0;const cd=new Set();const w=(v,d)=>{if(!v||d>6)return;if(Array.isArray(v))return v.forEach(x=>w(x,d+1));if(typeof v!=="object")return;if(v.order_code&&Array.isArray(v.order_items)&&v.order_items.length&&!cd.has(v.order_code)){cd.add(v.order_code);n++;l+=v.order_items.length}for(const k in v)w(v[k],d+1)};w(a,0);const b=new Blob([JSON.stringify(a)],{type:"application/json"});const e=document.createElement("a");e.href=URL.createObjectURL(b);e.download="k9-cache-"+new Date().toISOString().replace(/[:.]/g,"-")+".json";document.body.appendChild(e);e.click();alert(n?("CUU DUOC "+n+" phieu / "+l+" dong hang.\nFile da tai ve Downloads, gui file do ve ngay."):"KHONG CO PHIEU NAO CON DU LIEU tren may nay.")})()
+
+5. Máy sẽ hiện thông báo:
+   - "CUU DUOC n phieu / m dong hang" → tìm file k9-cache-....json trong Downloads, GỬI VỀ NGAY.
+   - "KHONG CO PHIEU NAO..." → máy này không còn dữ liệu, báo lại để khỏi chờ.
+
+LƯU Ý: dùng máy tính. Điện thoại không làm được cách này.
+Sau khi gửi file xong mới được F5 hoặc dùng lại trang.

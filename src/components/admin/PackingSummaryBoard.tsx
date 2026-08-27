@@ -63,6 +63,7 @@ interface SummaryRow {
   stockOnHand: number;
   stockMapped: boolean;
   orderedQty: number;
+  moq: number; // <--- THÊM DÒNG NÀY VÀO ĐÂY
   byBranch: Record<string, number>;
   isNew: boolean;
   isLocked: boolean;
@@ -157,18 +158,16 @@ export default function PackingSummaryBoard({
       codeToLabel.set(w.code, label);
     }
     for (const o of orders) {
-      const c = o.warehouse?.code;
+      // 1. Quét cả 2 trường hợp object từ Supabase và lấy fallback tên
+      const wh = o.warehouse || o.warehouses;
+      const c = wh?.code || wh?.short_name || wh?.name;
+
       if (c && c !== "Q7") {
         codes.add(c);
         if (!codeToLabel.has(c)) {
           codeToLabel.set(
             c,
-            warehouseShortLabel(o.warehouse) || warehouseLabel({
-              code: c,
-              short_name: o.warehouse?.short_name,
-              print_name: o.warehouse?.print_name,
-              name: undefined,
-            }) || c,
+            warehouseShortLabel(wh) || wh?.short_name || wh?.name || c,
           );
         }
       }
@@ -193,9 +192,11 @@ export default function PackingSummaryBoard({
       name: string,
       unitHint: string | null,
       barcodeHint: string | null,
+      itemUnit?: string | null,
     ): SummaryRow => {
       const meta = getMeta(index || new Map(), slug);
       let resolved = resolveLineUnitBarcode(meta, unitHint, barcodeHint);
+      
       if (!resolved.barcode && slug) {
         const opts = getSkuUnitOptions(skuUnitIndex, slug);
         const match = unitHint
@@ -208,34 +209,50 @@ export default function PackingSummaryBoard({
           };
         }
       }
-      // Key tổng hợp = mã + ĐVT (không gộp chung mã khác đơn vị)
+
+      // Chuẩn hóa chuỗi để so sánh đơn vị không phân biệt hoa/thường hay khoảng trắng
+      const cleanU = (u?: string | null) => (u || "").trim().toLowerCase();
+      const orderUnit = cleanU(itemUnit || unitHint);
+      const largeUnit2 = cleanU(meta?.unit_2);
+
+      const ratio = Number(meta?.unit_2_ratio) || 1;
+      const isLargeUnit = Boolean(largeUnit2 && orderUnit === largeUnit2);
+
+      // ĐẢM BẢO KHÔNG BỊ LỆCH ĐVT: Nếu là đơn vị lớn thì quy về ĐVT nhỏ của catalog, ngược lại giữ nguyên unitHint hoặc resolved.unit
+      const catalogSmallUnit = meta?.unit || resolved.unit;
+      const effectiveUnit = isLargeUnit && catalogSmallUnit ? catalogSmallUnit : (unitHint || resolved.unit || "—");
+
       const code = normalizeOrderCodeText(slug || name) || name;
-      const unitPart = normalizeOrderCodeText(resolved.unit || unitHint || "") || "—";
+      const unitPart = normalizeOrderCodeText(effectiveUnit || "") || "—";
       const skuKey = `${code}::${unitPart}`;
       let row = map.get(skuKey);
 
       if (!row) {
         const stockQty =
-          getQty(slug, resolved.unit) ??
-          getQty(resolved.barcode, resolved.unit) ??
+          getQty(slug, effectiveUnit) ??
+          getQty(resolved.barcode, effectiveUnit) ??
+          getQty(slug, meta?.unit) ??
           getQty(slug) ??
+          getQty(resolved.barcode) ??
           (meta?.stock_quantity != null ? meta.stock_quantity : null);
+
         row = {
           skuKey,
           productName: name,
           productSlug: slug,
-          unit: resolved.unit,
+          unit: effectiveUnit,
           barcode: resolved.barcode,
           stockOnHand: stockQty ?? 0,
           stockMapped: stockQty !== null,
           orderedQty: 0,
+          moq: ratio > 1 ? ratio : 1,
           byBranch: {},
           isNew: !!meta?.is_new,
           isLocked: !!meta?.is_locked,
         };
         map.set(skuKey, row);
       } else {
-        if (!row.unit && resolved.unit) row.unit = resolved.unit;
+        if (!row.unit && effectiveUnit) row.unit = effectiveUnit;
         if (!row.barcode && resolved.barcode) row.barcode = resolved.barcode;
         if (meta?.is_new) row.isNew = true;
         if (meta?.is_locked) row.isLocked = true;
@@ -244,9 +261,11 @@ export default function PackingSummaryBoard({
         }
         if (!row.stockMapped) {
           const stockQty =
-            getQty(slug, resolved.unit) ??
-            getQty(resolved.barcode, resolved.unit) ??
+            getQty(slug, effectiveUnit) ??
+            getQty(resolved.barcode, effectiveUnit) ??
+            getQty(slug, meta?.unit) ??
             getQty(slug) ??
+            getQty(resolved.barcode) ??
             (meta?.stock_quantity != null ? meta.stock_quantity : null);
           if (stockQty !== null) {
             row.stockOnHand = stockQty;
@@ -258,18 +277,33 @@ export default function PackingSummaryBoard({
     };
 
     for (const order of orders) {
-      const branch = order.warehouse?.code || "—";
+      const branch = order.warehouse?.code || "—"; 
+      
       for (const it of order.order_items || []) {
-        const qty = Number(it.qty_packed ?? it.qty_requested ?? it.quantity) || 0;
-        if (qty <= 0) continue;
+        const rawQty = Number(it.qty_packed ?? it.qty_requested ?? it.quantity) || 0;
+        if (rawQty <= 0) continue;
+        
+        const meta = getMeta(index || new Map(), it.product_slug);
+        const ratio = Number(meta?.unit_2_ratio) || 1;
+        
+        const cleanU = (u?: string | null) => (u || "").trim().toLowerCase();
+        const orderUnit = cleanU(it.unit);
+        const largeUnit2 = cleanU(meta?.unit_2);
+        const isLargeUnit = Boolean(largeUnit2 && orderUnit === largeUnit2);
+
+        // Nếu là đơn vị lớn (ví dụ: Bao), nhân tự động với tỷ lệ quy đổi (unit_2_ratio) ra đơn vị nhỏ (ví dụ: Gói)
+        const finalQty = isLargeUnit && ratio > 1 ? rawQty * ratio : rawQty;
+
         const row = ensure(
           it.product_slug,
           it.product_name,
           it.unit || null,
           it.barcode || null,
+          it.unit,
         );
-        row.orderedQty += qty;
-        row.byBranch[branch] = (row.byBranch[branch] || 0) + qty;
+        
+        row.orderedQty += finalQty;
+        row.byBranch[branch] = (row.byBranch[branch] || 0) + finalQty;
       }
     }
 
@@ -655,38 +689,35 @@ export default function PackingSummaryBoard({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((r, idx) => {
+                {(() => {
+                  // STT dùng biến đếm riêng để luôn liên tục theo dòng hiển thị
+                  let stt = 0;
+                  return rows.map((r) => {
+                  stt += 1;
                   const short = r.stockMapped && r.stockOnHand < r.orderedQty;
                   const thieu = short ? r.orderedQty - r.stockOnHand : 0;
+                  const moqError = r.moq > 1 && (r.orderedQty % r.moq !== 0);
+
                   return (
                     <TableRow
                       key={r.skuKey}
                       className={cn(
                         excelTr,
                         short && "bg-red-50",
-                        r.isNew && !short && "bg-emerald-50",
+                        !short && moqError && "bg-orange-50",
+                        r.isNew && !short && !moqError && "bg-emerald-50",
                         r.isLocked && "opacity-80",
                       )}
                     >
-                      <TableCell
-                        className={cn(
-                          excelTd,
-                          "text-center text-muted-foreground",
-                        )}
-                      >
-                        {idx + 1}
+                      {/* Cột 1: STT */}
+                      <TableCell className={cn(excelTd, "text-center text-muted-foreground")}>
+                        {stt}
                       </TableCell>
-                      <TableCell
-                        className={cn(
-                          excelTd,
-                          "font-mono font-semibold",
-                          r.isLocked && "text-red-700",
-                        )}
-                      >
+
+                      {/* Cột 2: Mã hàng */}
+                      <TableCell className={cn(excelTd, "font-mono font-semibold", r.isLocked && "text-red-700")}>
                         <span className="inline-flex items-center gap-1 flex-wrap">
-                          {r.isLocked ? (
-                            <Lock className="w-3 h-3 shrink-0" />
-                          ) : null}
+                          {r.isLocked ? <Lock className="w-3 h-3 shrink-0" /> : null}
                           {r.productSlug || "—"}
                           {r.isNew ? (
                             <Badge className="h-4 px-1 text-[9px] bg-emerald-600 hover:bg-emerald-600 gap-0.5">
@@ -696,55 +727,67 @@ export default function PackingSummaryBoard({
                           ) : null}
                         </span>
                       </TableCell>
+
+                      {/* Cột 3: Mã vạch */}
                       <TableCell className={cn(excelTd, "font-mono")}>
                         {r.barcode || "—"}
                       </TableCell>
-                      <TableCell
-                        className={cn(excelTd, "truncate max-w-[220px]")}
-                      >
+
+                      {/* Cột 4: Tên hàng */}
+                      <TableCell className={cn(excelTd, "truncate max-w-[220px]")}>
                         {r.productName}
                       </TableCell>
+
+                      {/* Cột 5: ĐVT */}
                       <TableCell className={cn(excelTd, "font-medium")}>
                         {r.unit || "—"}
                       </TableCell>
-                      <TableCell
-                        className={cn(
-                          excelTd,
-                          "text-right tabular-nums bg-emerald-50/60",
-                        )}
-                      >
+
+                      {/* Cột 6: Tồn Q7 */}
+                      <TableCell className={cn(excelTd, "text-right tabular-nums bg-emerald-50/60")}>
                         {r.stockMapped ? r.stockOnHand : "—"}
                       </TableCell>
-                      <TableCell
-                        className={cn(
-                          excelTd,
-                          "text-right tabular-nums bg-sky-50/60 font-bold",
-                        )}
-                      >
+
+                      {/* Cột 7: Tổng cần soạn */}
+                      <TableCell className={cn(excelTd, "text-right tabular-nums bg-sky-50/60 font-bold")}>
                         {r.orderedQty}
                       </TableCell>
+
+                      {/* Các cột chi nhánh động */}
                       {branchCodes.map((b) => (
-                        <TableCell
-                          key={b.code}
-                          className={cn(excelTd, "text-right tabular-nums")}
-                        >
+                        <TableCell key={b.code} className={cn(excelTd, "text-right tabular-nums")}>
                           {r.byBranch[b.code] || ""}
                         </TableCell>
                       ))}
+
+                      {/* Cột cuối cùng: Cảnh báo (Thiếu / Lệch MOQ / OK) */}
                       <TableCell className={excelTd}>
-                        {short ? (
-                          <span className="text-red-700 font-bold text-[13px]">
-                            THIẾU {thieu}
-                          </span>
-                        ) : (
-                          <span className="text-black font-medium text-[13px]">
-                            OK
-                          </span>
-                        )}
+                        {(() => {
+                          if (short) {
+                            return (
+                              <span className="text-red-700 font-bold text-[13px]">
+                                THIẾU {thieu}
+                              </span>
+                            );
+                          }
+                          if (moqError) {
+                            return (
+                              <span className="text-orange-600 font-bold text-[13px]" title={`Quy cách thùng/lốc: ${r.moq}`}>
+                                LỆCH MOQ ({r.moq})
+                              </span>
+                            );
+                          }
+                          return (
+                            <span className="text-black font-medium text-[13px]">
+                              OK
+                            </span>
+                          );
+                        })()}
                       </TableCell>
                     </TableRow>
                   );
-                })}
+                  });
+                })()}
               </TableBody>
             </Table>
           </div>

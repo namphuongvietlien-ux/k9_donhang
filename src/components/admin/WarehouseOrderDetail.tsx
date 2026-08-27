@@ -1257,7 +1257,11 @@ export default function WarehouseOrderDetail({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {displayOrderItems.map((it, idx) => {
+            {(() => {
+              // STT dùng biến đếm riêng để luôn liên tục 1,2,3… theo dòng hiển thị
+              let stt = 0;
+              return displayOrderItems.map((it) => {
+              stt += 1;
               const soft = it.line_notes || "";
               const loi = hasLoiNote(soft) || hasLoiNote(order.notes);
               const req = it.qty_requested ?? it.quantity;
@@ -1292,7 +1296,7 @@ export default function WarehouseOrderDetail({
                       "text-center text-muted-foreground tabular-nums",
                     )}
                   >
-                    {idx + 1}
+                    {stt}
                   </TableCell>
                   <TableCell className={excelTd}>
                     <ProductFlagBadges
@@ -1499,7 +1503,8 @@ export default function WarehouseOrderDetail({
                   )}
                 </TableRow>
               );
-            })}
+              });
+            })()}
           </TableBody>
         </Table>
       </div>

@@ -42,3 +42,8 @@ dist-ssr
 
 .vercel
 .env*
+
+# Dữ liệu cứu hộ sau sự cố TRUNCATE 22/08 — chứa dữ liệu kinh doanh, không commit
+k9-cache-*.json
+scripts/import/
+scripts/_products-snapshot-pre-pitr.*

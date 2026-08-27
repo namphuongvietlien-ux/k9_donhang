@@ -134,9 +134,12 @@ export function buildOrderPdfSheetInnerHtml(detail: PrintOrderDetail): string {
   const headerHtml = buildOrderPdfHeaderHtml(detail);
   let rowsHtml = "";
   const orderedItems = sortPrintOrderItems(detail.items || []);
-  orderedItems.forEach((it, index) => {
+  // STT chạy liên tục theo dòng thực in ra (bỏ qua dòng SL <= 0 / dòng bị lọc)
+  let stt = 0;
+  orderedItems.forEach((it) => {
     const sl = Number(it.sl) || 0;
     if (sl <= 0) return;
+    stt += 1;
     const parentCode = (it.parentSku || it.maHang || "").trim() || "—";
     const childCode = (it.maHang || "").trim();
     let variantLine = "";
@@ -165,7 +168,6 @@ export function buildOrderPdfSheetInnerHtml(detail: PrintOrderDetail): string {
       : it.isLocked
         ? ' style="background:#fef2f2;"'
         : "";
-    const stt = Number(it.stt ?? index + 1);
     rowsHtml +=
       `<tr${rowBg}><td>${stt}</td>` +
       `<td class="code">${escapeHtml(parentCode)}${mvLine}${flagLine}</td>` +
@@ -291,10 +293,13 @@ export function exportOrderExcel(detail: PrintOrderDetail): void {
     ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Số lượng (Soạn)"],
   ];
   const orderedItems = sortPrintOrderItems(detail.items || []);
-  orderedItems.forEach((it, index) => {
+  // STT chạy liên tục theo dòng thực xuất ra Excel
+  let stt = 0;
+  orderedItems.forEach((it) => {
     if ((Number(it.sl) || 0) <= 0) return;
+    stt += 1;
     rows.push([
-      Number(it.stt ?? index + 1),
+      stt,
       it.parentSku || it.maHang,
       it.maVach || "",
       it.tenHang,
