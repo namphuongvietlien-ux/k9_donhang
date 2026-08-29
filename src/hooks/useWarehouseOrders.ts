@@ -811,6 +811,8 @@ export function useWarehouseOrderMutations() {
       itemId: string;
       unit: string;
       barcode: string | null;
+      /** Đơn giá của quy cách ĐVT mới — bỏ trống nếu không muốn đổi giá */
+      price?: number | null;
       /** Ghi chú audit gắn line_notes */
       auditNote?: string | null;
     }) => {
@@ -851,10 +853,17 @@ export function useWarehouseOrderMutations() {
           .join("\n");
       }
 
+      const nextPrice =
+        input.price != null && Number.isFinite(Number(input.price))
+          ? Math.max(0, Number(input.price))
+          : null;
+
       const patch: Record<string, unknown> = {
         unit,
         barcode: input.barcode,
       };
+      // Đổi ĐVT → đơn giá phải theo quy cách mới (ĐVT lớn có giá riêng)
+      if (nextPrice != null) patch.price = nextPrice;
       if (input.auditNote) patch.line_notes = lineNotes;
 
       const { error } = await supabase
@@ -863,9 +872,14 @@ export function useWarehouseOrderMutations() {
         .eq("id", input.itemId);
       if (error) {
         if (/barcode|unit|line_notes/i.test(error.message || "")) {
+          const fallback: Record<string, unknown> = {
+            unit,
+            barcode: input.barcode,
+          };
+          if (nextPrice != null) fallback.price = nextPrice;
           const { error: retry } = await supabase
             .from("order_items")
-            .update({ unit, barcode: input.barcode } as never)
+            .update(fallback as never)
             .eq("id", input.itemId);
           if (retry) throw retry;
         } else {

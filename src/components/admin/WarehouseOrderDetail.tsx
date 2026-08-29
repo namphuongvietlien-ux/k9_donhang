@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowRightLeft,
+  Eye,
+  EyeOff,
   FileSpreadsheet,
   Lock,
   Loader2,
@@ -47,6 +50,12 @@ import {
   barcodeForUnit,
   type CatalogProductRow,
 } from "@/lib/catalogUnitBarcode";
+import {
+  exportKiotVietTransferFile,
+  exportKiotVietTransferFromTemplate,
+  KIOTVIET_Q7_WAREHOUSE,
+  type TransferExportLine,
+} from "@/lib/transferExportTemplate";
 import { filterCatalogSuggestions, resolveCatalogScan } from "@/lib/catalogSearch";
 import { checkCatalogAddBlocked } from "@/lib/catalogAddGuards";
 import {
@@ -75,6 +84,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
@@ -90,6 +100,15 @@ import QtyInput, {
   excelTr,
 } from "@/components/ui/qty-input";
 
+const vnd = (n: number) =>
+  (Number.isFinite(n) ? n : 0).toLocaleString("vi-VN", {
+    maximumFractionDigits: 0,
+  });
+
+/** Ô dòng Tổng cộng — ghim đáy bảng như excelTh ghim đỉnh */
+const excelTf =
+  "sticky bottom-0 z-20 border border-gray-300 bg-slate-100 p-1 px-1.5 text-[13px] h-9 whitespace-nowrap shadow-[0_-1px_0_#cbd5e1]";
+
 type CatalogHit = {
   id: string;
   name: string;
@@ -99,6 +118,10 @@ type CatalogHit = {
   unit: string | null;
   unit_2?: string | null;
   price?: number;
+  /** Giá riêng của ĐVT lớn (unit_2) — không suy ra từ price × tỷ lệ */
+  price_2?: number | null;
+  /** 1 unit_2 = unit_2_ratio × unit */
+  unit_2_ratio?: number | null;
   parent_sku?: string | null;
   is_new?: boolean;
   is_locked?: boolean;
@@ -154,10 +177,13 @@ export default function WarehouseOrderDetail({
   const [packed, setPacked] = useState<Record<string, number>>({});
   /** Draft SL yêu cầu — chỉ ghi DB khi bấm Lưu xác nhận (tab Quản Lý) */
   const [reqDraft, setReqDraft] = useState<Record<string, number>>({});
-  /** Draft ĐVT / MV khi đổi trên lưới (optimistic + gửi kèm Lưu soạn) */
+  /** Draft ĐVT / MV / đơn giá khi đổi trên lưới (optimistic + gửi kèm Lưu soạn) */
   const [unitDraft, setUnitDraft] = useState<
-    Record<string, { unit: string; barcode: string }>
+    Record<string, { unit: string; barcode: string; price?: number }>
   >({});
+  /** Chế độ xem chi tiết giá — hiện cột Đơn giá / Thành tiền */
+  const [showPrice, setShowPrice] = useState(false);
+  const [exportingTransfer, setExportingTransfer] = useState(false);
   const [unitBusyId, setUnitBusyId] = useState<string | null>(null);
   const [savingConfirm, setSavingConfirm] = useState(false);
   const [scan, setScan] = useState("");
@@ -184,6 +210,8 @@ export default function WarehouseOrderDetail({
         unit: p.unit,
         unit_2: p.unit_2 || null,
         price: Number(p.price) || 0,
+        price_2: Number(p.price_2) || null,
+        unit_2_ratio: Number(p.unit_2_ratio) || null,
         parent_sku: p.parent_sku || null,
         is_new: !!p.is_new,
         is_locked: !!p.is_locked,
@@ -335,6 +363,7 @@ export default function WarehouseOrderDetail({
 
     let slug = normalizeOrderCodeText(newSlug) || q;
     let name = newName.trim();
+    // ĐVT luôn ưu tiên giá trị đang chọn trên dropdown — không ép về ĐVT gốc catalog
     let unit = newUnit.trim();
     let barcode = newBarcode.trim();
     let price = newPrice;
@@ -359,15 +388,24 @@ export default function WarehouseOrderDetail({
       slug = normalizeOrderCodeText(hit.slug);
       name = name || hit.name;
       productId = hit.id;
-      if (!unit) {
-        const opts = resolveAvailableVariants(
-          catalogList as CatalogProductRow[],
-          slug,
-        );
-        const unitOpts =
-          opts.length > 0
-            ? opts
-            : expandProductUnitOptions(hit as CatalogProductRow);
+      const opts = resolveAvailableVariants(
+        catalogList as CatalogProductRow[],
+        slug,
+      );
+      const unitOpts =
+        opts.length > 0
+          ? opts
+          : expandProductUnitOptions(hit as CatalogProductRow);
+
+      if (unit) {
+        // Đã chọn ĐVT: chỉ dò biến thể để lấy MV / giá tương ứng, giữ nguyên ĐVT
+        const byUnit = resolveUnitOption(unitOpts, unit);
+        if (byUnit) {
+          unit = byUnit.unit;
+          barcode = String(byUnit.barcode ?? "").trim() || barcode;
+          price = Number(byUnit.price) || price;
+        }
+      } else {
         const bcPref = normalizeOrderCodeText(barcode || scan.trim());
         const match =
           unitOpts.find(
@@ -604,9 +642,9 @@ export default function WarehouseOrderDetail({
     setNewUnit(dvt);
     const match = resolveUnitOption(addUnitOptions, dvt);
     if (match) {
-      // Bắt buộc sync MV theo ĐVT — giữ nguyên mã hàng + tên
+      // Bắt buộc sync MV + đơn giá theo ĐVT — giữ nguyên mã hàng + tên
       setNewBarcode(match.barcode);
-      if (match.price > 0) setNewPrice(match.price);
+      setNewPrice(Number(match.price) || 0);
     }
   };
 
@@ -627,6 +665,15 @@ export default function WarehouseOrderDetail({
     unitDraft[it.id]?.unit ?? it.unit ?? "";
   const lineBarcode = (it: { id: string; barcode?: string | null }) =>
     unitDraft[it.id]?.barcode ?? it.barcode ?? "";
+  /** Đơn giá theo ĐVT đang chọn — draft thắng giá server khi vừa đổi ĐVT */
+  const linePrice = (it: { id: string; price?: number | null }) =>
+    Number(unitDraft[it.id]?.price ?? it.price ?? 0) || 0;
+  const lineQtyForMoney = (it: typeof order.order_items[number]) =>
+    Number(
+      variant === "packing"
+        ? packed[it.id] ?? it.qty_packed ?? it.qty_requested ?? it.quantity
+        : reqDraft[it.id] ?? it.qty_requested ?? it.quantity,
+    ) || 0;
   const isItemStockShort = (it: typeof order.order_items[number]) => {
     const requiredQty = Number(it.qty_requested ?? it.quantity) || 0;
     const availableQty =
@@ -644,17 +691,161 @@ export default function WarehouseOrderDetail({
     : order.order_items;
   const hiddenPackingItemCount = order.order_items.filter(isItemStockShort).length;
 
+  /** Tổng cộng cuối bảng — dùng cho cả Quản lý và Soạn hàng */
+  const footerTotals = displayOrderItems.reduce(
+    (acc, it) => {
+      const reqQty = Number(reqDraft[it.id] ?? it.qty_requested ?? it.quantity) || 0;
+      const packedQty =
+        Number(
+          packed[it.id] ?? it.qty_packed ?? it.qty_requested ?? it.quantity,
+        ) || 0;
+      acc.lines += 1;
+      acc.req += reqQty;
+      acc.packed += packedQty;
+      acc.received += Number(it.qty_received) || 0;
+      acc.money += linePrice(it) * lineQtyForMoney(it);
+      return acc;
+    },
+    { lines: 0, req: 0, packed: 0, received: 0, money: 0 },
+  );
+  /** SL tổng theo màn hình: Quản lý = SL yêu cầu, Soạn hàng = SL soạn */
+  const footerQtyTotal =
+    variant === "packing" ? footerTotals.packed : footerTotals.req;
+
+  /** ĐVT chuẩn từ catalog cho mã hàng (quy cách đầu tiên / unit gốc). */
+  const catalogUnitOf = (slug: string | null) => {
+    const opts = getSkuUnitOptions(skuUnitIndex, slug || "");
+    if (opts.length) return opts[0].unit;
+    const key = normalizeOrderCodeText(slug || "");
+    const hit = catalogList.find((p) => normalizeOrderCodeText(p.slug) === key);
+    return String(hit?.unit || "").trim();
+  };
+
+  /**
+   * ĐVT dùng cho In / Excel — bám đúng ô ĐVT đang hiển thị trên lưới:
+   * draft chưa lưu > resolve theo catalog (như Select) > ĐVT chuẩn catalog.
+   * Không dùng snapshot `order_items.unit` khi nó lệch với giao diện.
+   */
+  const printUnitOf = (it: typeof order.order_items[number]) => {
+    const shown = String(lineUnit(it) || "").trim();
+    const opts = getSkuUnitOptions(skuUnitIndex, it.product_slug || "");
+    if (unitEditable && opts.length) {
+      return (
+        resolveUnitOption(opts, shown)?.unit ||
+        opts[0]?.unit ||
+        shown ||
+        catalogUnitOf(it.product_slug)
+      );
+    }
+    return shown || catalogUnitOf(it.product_slug);
+  };
+
+  /** MV luôn đi kèm ĐVT đã chọn — đổi ĐVT thì MV phải theo (rule chung). */
+  const printBarcodeOf = (it: typeof order.order_items[number]) => {
+    const opts = getSkuUnitOptions(skuUnitIndex, it.product_slug || "");
+    const unit = printUnitOf(it);
+    const shownBarcode = String(lineBarcode(it) || "").trim();
+    if (
+      normalizeOrderCodeText(unit) === normalizeOrderCodeText(lineUnit(it))
+    ) {
+      return shownBarcode || barcodeForUnit(opts, unit);
+    }
+    return barcodeForUnit(opts, unit) || shownBarcode;
+  };
+
+  /** SL In / Excel = đúng con số người dùng đang thấy trên dòng đó. */
+  const printQtyOf = (it: typeof order.order_items[number]) => {
+    const reqShown =
+      Number(reqDraft[it.id] ?? it.qty_requested ?? it.quantity) || 0;
+    if (variant === "packing") {
+      return (
+        Number(
+          packed[it.id] ??
+            it.qty_packed ??
+            it.qty_requested ??
+            it.quantity,
+        ) || 0
+      );
+    }
+    // Quản lý: cột SL soạn chỉ hiện số của server; chưa soạn thì in SL yêu cầu
+    return it.qty_packed != null ? Number(it.qty_packed) || 0 : reqShown;
+  };
+
   const createPrintDetail = () => warehouseOrderToPrintDetail({
     ...order,
     order_items: exportableOrderItems.map((it) => ({
       ...it,
-      qty_packed:
-        packed[it.id] ??
-        it.qty_packed ??
-        it.qty_requested ??
-        it.quantity,
+      qty_packed: printQtyOf(it),
+      display_unit: printUnitOf(it),
+      display_barcode: printBarcodeOf(it),
     })),
   });
+
+  /**
+   * Lệnh điều chuyển KiotViet — cùng mẫu với nút "Xuất lệnh điều chuyển" của
+   * Bảng tổng hợp soạn hàng. ĐVT + SL lấy nguyên từ createPrintDetail() nên
+   * khớp tuyệt đối với bảng đang hiển thị.
+   */
+  const handleExportTransferOrder = async () => {
+    const detail = createPrintDetail();
+    const sourceWhId =
+      order.source_warehouse_id || order.source_warehouse?.id || null;
+    const khoXuat =
+      sourceWhId && q7?.id && sourceWhId === q7.id
+        ? KIOTVIET_Q7_WAREHOUSE
+        : [order.source_warehouse?.code, order.source_warehouse?.name]
+            .map((part) => String(part || "").trim())
+            .filter(Boolean)
+            .join(" | ") || detail.khoXuat;
+
+    const lines: TransferExportLine[] = detail.items
+      .filter((it) => (Number(it.sl) || 0) > 0)
+      .map((it) => ({
+        maHang: it.parentSku || it.maHang,
+        maVach: it.maVach || "",
+        tenHang: it.tenHang,
+        kho: khoXuat,
+        dvt: it.dvt,
+        soLuong: Number(it.sl) || 0,
+        ghiChu: `${detail.soPhieu} · Kho nhận: ${detail.khoNhan}`,
+      }));
+
+    if (!lines.length) {
+      toast({
+        title: "Không có dòng hàng để xuất",
+        description:
+          "Phiếu chưa có dòng đủ điều kiện (SL > 0, còn tồn, không khóa).",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const code = (detail.soPhieu || "phieu").replace(/[^\w.-]+/g, "_");
+    const fileName = `lenh-dieu-chuyen_${code}_${format(new Date(), "yyyyMMdd_HHmm")}.xlsx`;
+
+    setExportingTransfer(true);
+    try {
+      const usedTemplate = await exportKiotVietTransferFromTemplate(lines, {
+        fileName,
+      });
+      // Thiếu / lỗi file mẫu trong public → vẫn xuất bằng bản dựng lại đúng layout
+      if (!usedTemplate) exportKiotVietTransferFile(lines, { fileName });
+      toast({
+        title: "Đã xuất lệnh điều chuyển",
+        description:
+          `${lines.length} dòng · ${detail.khoXuat} → ${detail.khoNhan}` +
+          (usedTemplate ? "" : " · dùng bản dựng lại (không tải được file mẫu)"),
+      });
+    } catch (e) {
+      toast({
+        title: "Không xuất được lệnh điều chuyển",
+        description: e instanceof Error ? e.message : "Lỗi",
+        variant: "destructive",
+      });
+    } finally {
+      setExportingTransfer(false);
+    }
+  };
 
   const onLineUnitChange = async (
     it: {
@@ -662,6 +853,7 @@ export default function WarehouseOrderDetail({
       product_slug: string | null;
       unit?: string | null;
       barcode?: string | null;
+      price?: number | null;
     },
     nextUnit: string,
   ) => {
@@ -672,18 +864,22 @@ export default function WarehouseOrderDetail({
     const newBarcode = match
       ? String(match.barcode ?? "").trim()
       : barcodeForUnit(opts, newUnit);
+    const oldPrice = Number(it.price) || 0;
+    // Đơn giá theo quy cách mới; ĐVT lớn dùng price_2 (hoặc giá cơ sở × tỷ lệ)
+    const nextPrice = match ? Number(match.price) || 0 : oldPrice;
     const oldUnit = String(it.unit || "").trim() || "—";
     if (
       normalizeOrderCodeText(oldUnit) === normalizeOrderCodeText(newUnit) &&
       normalizeOrderCodeText(newBarcode) ===
-        normalizeOrderCodeText(it.barcode || "")
+        normalizeOrderCodeText(it.barcode || "") &&
+      nextPrice === oldPrice
     ) {
       return;
     }
 
     setUnitDraft((d) => ({
       ...d,
-      [it.id]: { unit: newUnit, barcode: newBarcode },
+      [it.id]: { unit: newUnit, barcode: newBarcode, price: nextPrice },
     }));
 
     const sku = normalizeOrderCodeText(it.product_slug || "") || "—";
@@ -695,11 +891,15 @@ export default function WarehouseOrderDetail({
         itemId: it.id,
         unit: newUnit,
         barcode: newBarcode || null,
+        price: match ? nextPrice : null,
         auditNote,
       });
       toast({
         title: "Đã đổi ĐVT",
-        description: `${sku}: ${oldUnit} → ${newUnit}${newBarcode ? ` · MV ${newBarcode}` : ""}`,
+        description:
+          `${sku}: ${oldUnit} → ${newUnit}` +
+          (newBarcode ? ` · MV ${newBarcode}` : "") +
+          (match && nextPrice !== oldPrice ? ` · Giá ${vnd(nextPrice)}đ` : ""),
       });
     } catch (e) {
       setUnitDraft((d) => {
@@ -914,6 +1114,19 @@ export default function WarehouseOrderDetail({
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
+            variant={showPrice ? "default" : "outline"}
+            size="sm"
+            onClick={() => setShowPrice((v) => !v)}
+            title="Bật/tắt cột Đơn giá & Thành tiền"
+          >
+            {showPrice ? (
+              <EyeOff className="w-4 h-4 mr-1" />
+            ) : (
+              <Eye className="w-4 h-4 mr-1" />
+            )}
+            {showPrice ? "Ẩn giá" : "Xem chi tiết giá"}
+          </Button>
+          <Button
             variant="secondary"
             size="sm"
             onClick={() => {
@@ -945,6 +1158,20 @@ export default function WarehouseOrderDetail({
           >
             <FileSpreadsheet className="w-4 h-4 mr-1" />
             Xuất Excel
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handleExportTransferOrder()}
+            disabled={stockLoading || exportingTransfer}
+            title="Mẫu lệnh điều chuyển MISA"
+          >
+            {exportingTransfer ? (
+              <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+            ) : (
+              <ArrowRightLeft className="w-4 h-4 mr-1" />
+            )}
+            Xuất lệnh điều chuyển
           </Button>
           {isAdmin && !order.is_locked && (
             <Button
@@ -1122,11 +1349,7 @@ export default function WarehouseOrderDetail({
                 <Label className="text-xs">ĐVT</Label>
                 {addUnitOptions.length > 0 ? (
                   <Select
-                    value={
-                      resolveUnitOption(addUnitOptions, newUnit)?.unit ||
-                      addUnitOptions[0]?.unit ||
-                      newUnit
-                    }
+                    value={newUnit || addUnitOptions[0]?.unit || ""}
                     onValueChange={onAddUnitChange}
                     disabled={addUnitOptions.length === 1}
                   >
@@ -1219,6 +1442,15 @@ export default function WarehouseOrderDetail({
               <strong className="uppercase text-foreground">{newSlug}</strong>
               {newName ? ` — ${newName}` : ""}
               {newBarcode ? ` · MV: ${newBarcode}` : ""}
+              {newUnit ? ` · ĐVT: ${newUnit}` : ""}
+              {newPrice > 0 ? (
+                <span className="text-emerald-700 font-semibold">
+                  {` · Đơn giá: ${vnd(newPrice)}đ`}
+                  {newQty > 0
+                    ? ` · Thành tiền: ${vnd(newPrice * newQty)}đ`
+                    : ""}
+                </span>
+              ) : null}
               {" · Enter ở SL để xác nhận"}
             </div>
           ) : null}
@@ -1241,6 +1473,18 @@ export default function WarehouseOrderDetail({
               <TableHead className={cn(excelTh, "text-left")}>Mã vạch</TableHead>
               <TableHead className={cn(excelTh, "text-left")}>Tên hàng</TableHead>
               <TableHead className={cn(excelTh, "w-28")}>ĐVT</TableHead>
+              {showPrice && (
+                <>
+                  <TableHead className={cn(excelTh, "text-right w-24")}>
+                    Đơn giá
+                  </TableHead>
+                  <TableHead
+                    className={cn(excelTh, "text-right w-28 bg-amber-100")}
+                  >
+                    Thành tiền
+                  </TableHead>
+                </>
+              )}
               <TableHead className={cn(excelTh, "text-right bg-emerald-100")}>
                 Tồn
               </TableHead>
@@ -1278,6 +1522,8 @@ export default function WarehouseOrderDetail({
                 getQty(displayBarcode, displayUnit) ??
                 getQty(it.product_name, displayUnit);
               const stockShort = isItemStockShort(it);
+              const unitPrice = linePrice(it);
+              const moneyQty = lineQtyForMoney(it);
               return (
                 <TableRow
                   key={it.id}
@@ -1415,6 +1661,26 @@ export default function WarehouseOrderDetail({
                       />
                     )}
                   </TableCell>
+                  {showPrice && (
+                    <>
+                      <TableCell
+                        className={cn(
+                          excelTd,
+                          "text-right tabular-nums text-xs",
+                        )}
+                      >
+                        {unitPrice > 0 ? `${vnd(unitPrice)}đ` : "—"}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          excelTd,
+                          "text-right tabular-nums text-xs font-semibold bg-amber-50/60",
+                        )}
+                      >
+                        {unitPrice > 0 ? `${vnd(unitPrice * moneyQty)}đ` : "—"}
+                      </TableCell>
+                    </>
+                  )}
                   <TableCell
                     className={cn(
                       excelTd,
@@ -1506,8 +1772,86 @@ export default function WarehouseOrderDetail({
               });
             })()}
           </TableBody>
+          <TableFooter className="bg-transparent">
+            <TableRow className="hover:bg-transparent">
+              <TableCell colSpan={5} className={cn(excelTf, "text-left")}>
+                <span className="font-semibold">
+                  TỔNG CỘNG: {footerTotals.lines} dòng hàng
+                </span>
+                <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+                  ({variant === "packing" ? "SL soạn" : "SL yêu cầu"} ×{" "}
+                  đơn giá dòng)
+                </span>
+                {!showPrice ? (
+                  <span className="ml-3 font-bold text-amber-900">
+                    Tổng tiền:{" "}
+                    <span className="tabular-nums text-[15px]">
+                      {vnd(footerTotals.money)}đ
+                    </span>
+                  </span>
+                ) : null}
+              </TableCell>
+              {showPrice && (
+                <>
+                  <TableCell
+                    className={cn(excelTf, "text-right text-muted-foreground")}
+                  >
+                    —
+                  </TableCell>
+                  <TableCell
+                    className={cn(
+                      excelTf,
+                      "text-right tabular-nums bg-amber-100 text-[15px] font-bold text-amber-900",
+                    )}
+                  >
+                    {vnd(footerTotals.money)}đ
+                  </TableCell>
+                </>
+              )}
+              <TableCell className={cn(excelTf, "text-right")} />
+              <TableCell
+                className={cn(
+                  excelTf,
+                  "text-right tabular-nums bg-sky-50",
+                  variant !== "packing" &&
+                    "text-[15px] font-bold text-sky-900",
+                )}
+              >
+                {footerTotals.req.toLocaleString("vi-VN")}
+              </TableCell>
+              <TableCell
+                className={cn(
+                  excelTf,
+                  "text-right tabular-nums bg-amber-50",
+                  variant === "packing" &&
+                    "text-[15px] font-bold text-amber-900",
+                )}
+              >
+                {footerTotals.packed.toLocaleString("vi-VN")}
+              </TableCell>
+              <TableCell
+                className={cn(excelTf, "text-right tabular-nums bg-emerald-50")}
+              >
+                {footerTotals.received.toLocaleString("vi-VN")}
+              </TableCell>
+              {!locked && <TableCell className={excelTf} />}
+            </TableRow>
+          </TableFooter>
         </Table>
       </div>
+
+      <p className="text-right text-sm">
+        <span className="text-muted-foreground">
+          Tổng {footerQtyTotal.toLocaleString("vi-VN")}{" "}
+          {variant === "packing" ? "SL soạn" : "SL yêu cầu"} ·{" "}
+        </span>
+        <span className="font-bold text-amber-900">
+          Tổng thành tiền:{" "}
+          <span className="tabular-nums text-base">
+            {vnd(footerTotals.money)}đ
+          </span>
+        </span>
+      </p>
     </div>
   );
 }

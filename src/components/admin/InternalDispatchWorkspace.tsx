@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
-import { Bell, Check, FileDown, Loader2, Plus, Printer, Send, Trash2, X } from "lucide-react";
+import { Bell, Check, Eye, FileDown, Loader2, Plus, Printer, Send, Trash2, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useProducts } from "@/hooks/useProducts";
@@ -17,6 +17,7 @@ import {
 import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import { openWeeklyBranchPrintWindow, type WeeklyBranchSheet } from "@/lib/internalDispatchPrint";
 import { ProductSearchInput } from "@/components/admin/ProductSearchInput";
+import InternalDispatchDetailDialog from "@/components/admin/InternalDispatchDetailDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -241,6 +242,8 @@ export default function InternalDispatchWorkspace() {
   const [notes, setNotes] = useState("");
   const [branchFilter, setBranchFilter] = useState("all");
   const [isLinkingTelegram, setIsLinkingTelegram] = useState(false);
+  /** Phiếu đang mở ở "mắt xem đơn" — giữ id để dữ liệu luôn theo query mới nhất */
+  const [viewDispatchId, setViewDispatchId] = useState<string | null>(null);
   const canManage = role === "manager" || role === "super_admin";
   const canComplete = role === "super_admin";
 
@@ -335,6 +338,7 @@ export default function InternalDispatchWorkspace() {
     },
     onSuccess: async (dispatch) => {
       await refresh();
+      toast({ title: `Đã duyệt ${dispatch.dispatch_code}`, description: "Hàng đã được cộng vào đơn tuần." });
       warnIfTelegramFailed(await notifyInternalDispatchTelegram(
         `✅ <b>Quản lý đã duyệt ${escapeTelegramHtml(dispatch.dispatch_code)}</b>\nChi nhánh: ${escapeTelegramHtml(dispatch.warehouses?.code || "—")}\nHàng đã được cộng vào đơn tuần.`,
         { recipientUserIds: [dispatch.requested_by] },
@@ -349,6 +353,7 @@ export default function InternalDispatchWorkspace() {
     },
     onSuccess: async (dispatch) => {
       await refresh();
+      toast({ title: `Đã từ chối ${dispatch.dispatch_code}`, variant: "destructive" });
       warnIfTelegramFailed(await notifyInternalDispatchTelegram(
         `❌ <b>Quản lý không duyệt ${escapeTelegramHtml(dispatch.dispatch_code)}</b>\nChi nhánh: ${escapeTelegramHtml(dispatch.warehouses?.code || "—")}\nVui lòng kiểm tra và tạo lại yêu cầu khi cần.`,
         { recipientUserIds: [dispatch.requested_by] },
@@ -473,6 +478,13 @@ export default function InternalDispatchWorkspace() {
 
   const branchScopeLabel = activeBranch ? activeBranch.label : "Tất cả chi nhánh";
 
+  /** Phiếu đang xem — lấy lại từ danh sách để trạng thái tự đổi sau khi duyệt */
+  const viewDispatch = useMemo(
+    () => dispatches.find((dispatch) => dispatch.id === viewDispatchId) || null,
+    [dispatches, viewDispatchId],
+  );
+  const decisionPending = approveMutation.isPending || rejectMutation.isPending;
+
   const branchCellText = (item: DispatchItem) => {
     const byBranch = weeklyBreakdown?.perSku.get(weeklySkuKey(item.product_code, item.unit));
     if (!byBranch?.size) return "—";
@@ -553,7 +565,7 @@ export default function InternalDispatchWorkspace() {
       <div className="grid gap-3 sm:grid-cols-[1fr_auto] items-end"><div><Label htmlFor="dispatch-notes">Ghi chú</Label><Textarea id="dispatch-notes" value={notes} onChange={(event) => setNotes(event.target.value)} /></div><Button onClick={() => createMutation.mutate()} disabled={!lines.length || createMutation.isPending}>{createMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}Gửi quản lý</Button></div>
     </CardContent></Card>}
 
-    <Card className="print:hidden"><CardHeader><CardTitle className="text-lg">Đơn xuất nội bộ — {branchScopeLabel} <span className="text-sm font-normal text-muted-foreground">({visibleDispatches.length} phiếu)</span></CardTitle></CardHeader><CardContent><div className="overflow-x-auto border rounded-md"><Table><TableHeader><TableRow><TableHead>Mã đơn</TableHead><TableHead>Chi nhánh</TableHead><TableHead>Ngày gửi</TableHead><TableHead>Trạng thái</TableHead><TableHead>Dòng hàng</TableHead>{canManage && <TableHead className="text-right">Thao tác</TableHead>}</TableRow></TableHeader><TableBody>{isLoading ? <TableRow><TableCell colSpan={6} className="py-8 text-center"><Loader2 className="inline h-4 w-4 animate-spin" /></TableCell></TableRow> : !visibleDispatches.length ? <TableRow><TableCell colSpan={6} className="py-8 text-center text-muted-foreground">{activeBranch ? `Chi nhánh ${activeBranch.label} chưa có đơn xuất nội bộ.` : "Chưa có đơn xuất nội bộ."}</TableCell></TableRow> : visibleDispatches.map((dispatch) => <TableRow key={dispatch.id}><TableCell className="font-mono text-xs">{dispatch.dispatch_code}</TableCell><TableCell>{warehouseShortLabel(dispatch.warehouses)}</TableCell><TableCell>{new Date(dispatch.requested_at).toLocaleDateString("vi-VN")}</TableCell><TableCell><Badge variant="secondary">{statusLabel[dispatch.status] || dispatch.status}</Badge></TableCell><TableCell>{dispatch.internal_dispatch_items.length}</TableCell>{canManage && <TableCell className="text-right">{dispatch.status === "pending_manager" && <div className="inline-flex gap-2"><Button size="sm" onClick={() => approveMutation.mutate(dispatch)} disabled={approveMutation.isPending || rejectMutation.isPending}><Check className="mr-1 h-4 w-4" />Duyệt</Button><Button size="sm" variant="destructive" onClick={() => { if (confirm(`Không duyệt đơn ${dispatch.dispatch_code}?`)) rejectMutation.mutate(dispatch); }} disabled={approveMutation.isPending || rejectMutation.isPending}><X className="mr-1 h-4 w-4" />Không duyệt</Button></div>}</TableCell>}</TableRow>)}</TableBody></Table></div></CardContent></Card>
+    <Card className="print:hidden"><CardHeader><CardTitle className="text-lg">Đơn xuất nội bộ — {branchScopeLabel} <span className="text-sm font-normal text-muted-foreground">({visibleDispatches.length} phiếu)</span></CardTitle></CardHeader><CardContent><div className="overflow-x-auto border rounded-md"><Table><TableHeader><TableRow><TableHead>Mã đơn</TableHead><TableHead>Chi nhánh</TableHead><TableHead>Ngày gửi</TableHead><TableHead>Trạng thái</TableHead><TableHead>Dòng hàng</TableHead><TableHead className="text-right">Thao tác</TableHead></TableRow></TableHeader><TableBody>{isLoading ? <TableRow><TableCell colSpan={6} className="py-8 text-center"><Loader2 className="inline h-4 w-4 animate-spin" /></TableCell></TableRow> : !visibleDispatches.length ? <TableRow><TableCell colSpan={6} className="py-8 text-center text-muted-foreground">{activeBranch ? `Chi nhánh ${activeBranch.label} chưa có đơn xuất nội bộ.` : "Chưa có đơn xuất nội bộ."}</TableCell></TableRow> : visibleDispatches.map((dispatch) => <TableRow key={dispatch.id}><TableCell className="font-mono text-xs">{dispatch.dispatch_code}</TableCell><TableCell>{warehouseShortLabel(dispatch.warehouses)}</TableCell><TableCell>{new Date(dispatch.requested_at).toLocaleDateString("vi-VN")}</TableCell><TableCell><Badge variant="secondary">{statusLabel[dispatch.status] || dispatch.status}</Badge></TableCell><TableCell>{dispatch.internal_dispatch_items.length}</TableCell><TableCell className="text-right"><div className="inline-flex items-center gap-2"><Button size="sm" variant="outline" aria-label={`Xem phiếu ${dispatch.dispatch_code}`} title="Xem đơn và duyệt ngay trên phiếu" onClick={() => setViewDispatchId(dispatch.id)}><Eye className="h-4 w-4" /></Button>{canManage && dispatch.status === "pending_manager" && <><Button size="sm" onClick={() => approveMutation.mutate(dispatch)} disabled={decisionPending}><Check className="mr-1 h-4 w-4" />Duyệt</Button><Button size="sm" variant="destructive" onClick={() => { if (confirm(`Không duyệt đơn ${dispatch.dispatch_code}?`)) rejectMutation.mutate(dispatch); }} disabled={decisionPending}><X className="mr-1 h-4 w-4" />Không duyệt</Button></>}</div></TableCell></TableRow>)}</TableBody></Table></div></CardContent></Card>
 
     {canManage && <Card className="print:hidden"><CardHeader className="flex-row items-center justify-between"><div><CardTitle className="text-lg">Đơn tuần {currentWeekly ? `từ ${currentWeekly.week_start}` : ""} — {branchScopeLabel}</CardTitle><p className="mt-1 text-sm text-muted-foreground">{activeBranch ? `Chỉ hiển thị phần hàng phân bổ cho ${activeBranch.label} (${visibleWeeklyItems.length} mã · tổng ${weeklyTotalQty}).` : "Danh sách hàng đã cộng dồn theo mã hàng của tất cả chi nhánh."}</p></div>{currentWeekly && <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => printMutation.mutate(currentWeekly)} disabled={printMutation.isPending || !visibleWeeklyItems.length}><Printer className="mr-2 h-4 w-4" />{activeBranch ? `In phiếu ${activeBranch.label}` : "In phiếu tổng hợp"}</Button><Button variant="outline" onClick={printByBranch} disabled={markPrintedMutation.isPending || !branchSheets.length}><Printer className="mr-2 h-4 w-4" />{activeBranch ? "In phiếu riêng (tab mới)" : `In riêng từng CN (${branchSheets.length})`}</Button>{canComplete && currentWeekly.status !== "processed" && <Button onClick={() => completeMutation.mutate(currentWeekly)} disabled={completeMutation.isPending}><Check className="mr-2 h-4 w-4" />Xác nhận đã xử lý</Button>}</div>}</CardHeader><CardContent>{currentWeekly ? <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>STT</TableHead><TableHead>Mã hàng</TableHead><TableHead>Tên hàng</TableHead><TableHead>ĐVT</TableHead><TableHead className="text-right">{activeBranch ? `SL ${activeBranch.label}` : "Tổng SL"}</TableHead><TableHead>Chi nhánh xuất (SL)</TableHead></TableRow></TableHeader><TableBody>{!visibleWeeklyItems.length ? <TableRow><TableCell colSpan={6} className="py-8 text-center text-muted-foreground">{activeBranch ? `Chi nhánh ${activeBranch.label} không có hàng trong đơn tuần này.` : "Đơn tuần chưa có dòng hàng."}</TableCell></TableRow> : (() => { let stt = 0; return visibleWeeklyItems.map((item) => { stt += 1; return <TableRow key={item.id || item.line_no}><TableCell>{stt}</TableCell><TableCell className="font-mono text-xs">{item.product_code}</TableCell><TableCell>{item.product_name}</TableCell><TableCell>{item.unit || "—"}</TableCell><TableCell className="text-right tabular-nums">{item.quantity}</TableCell><TableCell className="text-xs text-muted-foreground">{branchCellText(item)}</TableCell></TableRow>; }); })()}</TableBody></Table></div> : <p className="py-6 text-sm text-muted-foreground">Chưa có đơn tuần được tạo.</p>}</CardContent></Card>}
 
@@ -584,5 +596,21 @@ export default function InternalDispatchWorkspace() {
         <div><strong>THỦ KHO / TỔNG CÔNG TY</strong><span>(Ký, ghi rõ họ tên)</span></div>
       </footer>
     </section> : null}
+
+    <InternalDispatchDetailDialog
+      open={!!viewDispatch}
+      onOpenChange={(next) => { if (!next) setViewDispatchId(null); }}
+      dispatch={viewDispatch}
+      branchLabel={warehouseShortLabel(viewDispatch?.warehouses || null)}
+      statusText={viewDispatch ? statusLabel[viewDispatch.status] || viewDispatch.status : ""}
+      canDecide={canManage && viewDispatch?.status === "pending_manager"}
+      isBusy={decisionPending}
+      onApprove={() => { if (viewDispatch) approveMutation.mutate(viewDispatch); }}
+      onReject={() => {
+        if (!viewDispatch) return;
+        if (!confirm(`Không duyệt đơn ${viewDispatch.dispatch_code}?`)) return;
+        rejectMutation.mutate(viewDispatch);
+      }}
+    />
   </div>;
 }

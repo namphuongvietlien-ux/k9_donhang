@@ -342,6 +342,13 @@ export function warehouseOrderToPrintDetail(order: {
     qty_packed?: number | null;
     barcode?: string | null;
     unit?: string | null;
+    /**
+     * ĐVT / MV đang hiển thị trên lưới web (đã resolve theo catalog + draft chưa
+     * lưu). Có giá trị thì thắng snapshot `unit` / `barcode` của order_items —
+     * In & Excel phải khớp đúng những gì người dùng đang thấy.
+     */
+    display_unit?: string | null;
+    display_barcode?: string | null;
   }>;
 }): PrintOrderDetail {
   const label = (w: {
@@ -365,8 +372,8 @@ export function warehouseOrderToPrintDetail(order: {
         stt: Number((it as { stt?: number | null }).stt ?? 0) || null,
         maHang: it.product_slug || "",
         tenHang: it.product_name,
-        dvt: it.unit || "",
-        maVach: it.barcode || "",
+        dvt: String(it.display_unit ?? "").trim() || it.unit || "",
+        maVach: String(it.display_barcode ?? "").trim() || it.barcode || "",
         parentSku: it.product_slug || "",
         sl: resolvePrintQty({
           status: order.status,
