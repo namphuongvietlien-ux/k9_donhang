@@ -182,6 +182,7 @@ const CreateWarehouseOrderForm = forwardRef<
   );
   const [destWh, setDestWh] = useState(() => initialDraft?.destWh || "");
   const [scan, setScan] = useState("");
+  const [allowPartial, setAllowPartial] = useState(false);
   const [lines, setLines] = useState<CartLine[]>(
     () =>
       (Array.isArray(initialDraft?.lines) ? initialDraft!.lines : []).map(
@@ -593,11 +594,11 @@ const CreateWarehouseOrderForm = forwardRef<
       if (l.quantity <= 0 || l.isCustomSku) return false;
       return !isQtyMultipleOfMoq(l.quantity, lineMoq(l));
     });
-    if (moqBad) {
-      const moq = lineMoq(moqBad);
+    if (moqBad && !allowPartial) {
       toast({
-        title: "SL không đúng bội số MOQ",
-        description: `${moqBad.maHang}: SL ${moqBad.quantity} phải là bội số của ${moq}.`,
+        title: "Chưa đạt số lượng MOQ",
+        description:
+          "Bạn đang nhập số lượng lẻ. Vui lòng tick vào ô 'Xác nhận cho phép xuất lẻ' ở trên bảng để lưu đơn.",
         variant: "destructive",
       });
       return;
@@ -622,6 +623,7 @@ const CreateWarehouseOrderForm = forwardRef<
       toast({ title: "Đã tạo phiếu", description: res.order_code });
       clearDraft();
       setLines([]);
+      setAllowPartial(false);
       setDupOpen(false);
       setDupInfo(null);
       void refetchCatalog();
@@ -937,9 +939,26 @@ const CreateWarehouseOrderForm = forwardRef<
           ) : null}
         </div>
 
+        <div className="flex items-center gap-2 mb-2 bg-amber-50 border border-amber-200 text-amber-800 p-2 rounded-md w-fit">
+          <input
+            type="checkbox"
+            id="allowPartial"
+            className="w-4 h-4 cursor-pointer accent-amber-600"
+            checked={allowPartial}
+            onChange={(e) => setAllowPartial(e.target.checked)}
+          />
+          <Label
+            htmlFor="allowPartial"
+            className="cursor-pointer font-semibold text-xs"
+          >
+            Xác nhận cho phép xuất lẻ (nhập số lượng dưới mức MOQ quy định)
+          </Label>
+        </div>
+
         <OrderItemsGrid
           lines={lines}
           skuUnitIndex={skuUnitIndex}
+          allowPartial={allowPartial}
           getQty={getQty}
           onQty={setQty}
           onUnit={setLineUnit}

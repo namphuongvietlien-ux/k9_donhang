@@ -62,6 +62,7 @@ const vnd = (n: number) =>
 export type OrderItemsGridProps = {
   lines: OrderGridLine[];
   skuUnitIndex: Map<string, SkuUnitOption[]>;
+  allowPartial?: boolean;
   getQty: (code: string, unit?: string | null) => number | null | undefined;
   onQty: (key: string, qty: number) => void;
   onUnit: (key: string, dvt: string) => void;
@@ -74,6 +75,7 @@ export type OrderItemsGridProps = {
 export function OrderItemsGrid({
   lines,
   skuUnitIndex,
+  allowPartial,
   getQty,
   onQty,
   onUnit,
@@ -159,7 +161,9 @@ export function OrderItemsGrid({
                 l.dvt,
                 l.moq,
               );
+              const qtyStep = allowPartial ? 1 : moq;
               const moqError =
+                !allowPartial &&
                 !isCustom &&
                 !loi &&
                 moq > 1 &&
@@ -311,8 +315,8 @@ export function OrderItemsGrid({
                         size="icon"
                         variant="outline"
                         className="h-7 w-7 shrink-0"
-                        onClick={() => onQty(l.key, l.quantity - moq)}
-                        title={moq > 1 ? `Giảm ${moq}` : "Giảm 1"}
+                        onClick={() => onQty(l.key, l.quantity - qtyStep)}
+                        title={qtyStep > 1 ? `Giảm ${qtyStep}` : "Giảm 1"}
                       >
                         <Minus className="w-3 h-3" />
                       </Button>
@@ -323,7 +327,8 @@ export function OrderItemsGrid({
                         )}
                         value={l.quantity}
                         onValueChange={(v) => onQty(l.key, v)}
-                        step={moq}
+                        min={allowPartial ? 1 : moq}
+                        step={qtyStep}
                         title={
                           moqError
                             ? `SL phải là bội số của MOQ ${moq}`
@@ -335,8 +340,8 @@ export function OrderItemsGrid({
                         size="icon"
                         variant="outline"
                         className="h-7 w-7 shrink-0"
-                        onClick={() => onQty(l.key, l.quantity + moq)}
-                        title={moq > 1 ? `Tăng ${moq}` : "Tăng 1"}
+                        onClick={() => onQty(l.key, l.quantity + qtyStep)}
+                        title={qtyStep > 1 ? `Tăng ${qtyStep}` : "Tăng 1"}
                       >
                         <Plus className="w-3 h-3" />
                       </Button>

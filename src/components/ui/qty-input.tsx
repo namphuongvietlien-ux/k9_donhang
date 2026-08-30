@@ -72,7 +72,10 @@ const QtyInput = React.forwardRef<HTMLInputElement, QtyInputProps>(
         onBlur={(e) => {
           setFocused(false);
           const n = Number(e.currentTarget.value);
-          const final = Number.isNaN(n) ? 0 : n;
+          const raw = Number.isNaN(n) ? 0 : n;
+          const minN = Number(min);
+          const final =
+            Number.isFinite(minN) && raw < minN ? minN : raw;
           setDraft(String(final));
           onValueChange?.(final);
           onBlur?.(e);
