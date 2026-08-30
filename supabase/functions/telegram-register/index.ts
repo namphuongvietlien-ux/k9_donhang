@@ -21,7 +21,8 @@ serve(async (req) => {
   const url = Deno.env.get("SUPABASE_URL") || "";
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-  const botUsername = Deno.env.get("TELEGRAM_INTERNAL_BOT_USERNAME") || "xuatnoibo_bot";
+  // Phải khớp username bot thật (vd. @xuatluuchuong). Sai username → user mở nhầm bot.
+  const botUsername = Deno.env.get("TELEGRAM_INTERNAL_BOT_USERNAME") || "xuatluuchuong";
   const authHeader = req.headers.get("Authorization") || "";
   const token = authHeader.replace(/^Bearer\s+/i, "");
   const auth = createClient(url, anonKey, { auth: { persistSession: false } });

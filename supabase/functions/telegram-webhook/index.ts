@@ -145,6 +145,12 @@ serve(async (req) => {
     return new Response("ok");
   }
 
+  if (!url || !serviceKey) {
+    console.error("telegram-webhook missing SUPABASE_URL or SERVICE_ROLE_KEY");
+    await reply(token, chatId, "Máy chủ chưa cấu hình đủ. Báo quản trị viên kiểm tra biến môi trường.");
+    return new Response("ok");
+  }
+
   const query = new URLSearchParams({
     token: `eq.${linkToken}`,
     expires_at: `gt.${new Date().toISOString()}`,
@@ -154,11 +160,31 @@ serve(async (req) => {
     `${url}/rest/v1/telegram_link_tokens?${query}`,
     { headers },
   );
-  const [link] = await linkResponse.json();
+  let linkPayload: unknown;
+  try {
+    linkPayload = await linkResponse.json();
+  } catch {
+    linkPayload = null;
+  }
+  const link = Array.isArray(linkPayload) ? linkPayload[0] : null;
 
-  if (!link) {
+  if (!linkResponse.ok || !link?.user_id) {
     await reply(token, chatId, "Liên kết đã hết hạn hoặc không hợp lệ. Hãy tạo liên kết mới từ portal.");
     return new Response("ok");
+  }
+
+  /**
+   * Bảng có UNIQUE(chat_id) + PK(user_id). Upsert chỉ on_conflict=user_id sẽ
+   * lỗi 23505 nếu chat Telegram này đã gắn user khác → bot trả "Không thể kết nối".
+   * Giải phóng chat_id trước, rồi merge theo user_id (đổi máy / đổi tài khoản portal).
+   */
+  const freeChat = await fetch(
+    `${url}/rest/v1/telegram_notification_subscriptions?chat_id=eq.${encodeURIComponent(chatId)}`,
+    { method: "DELETE", headers },
+  );
+  if (!freeChat.ok) {
+    const detail = await freeChat.text();
+    console.error("telegram free chat_id failed", freeChat.status, detail);
   }
 
   const saveResponse = await fetch(
@@ -169,15 +195,27 @@ serve(async (req) => {
       body: JSON.stringify({
         user_id: link.user_id,
         chat_id: chatId,
-        chat_username: message?.chat?.username || null,
+        chat_username: message?.from?.username || message?.chat?.username || null,
         updated_at: new Date().toISOString(),
       }),
     },
   );
-  await fetch(`${url}/rest/v1/telegram_link_tokens?token=eq.${linkToken}`, {
-    method: "DELETE",
-    headers,
-  });
-  await reply(token, chatId, saveResponse.ok ? "Đã kết nối. Bạn sẽ nhận thông báo đơn xuất nội bộ tại đây." : "Không thể kết nối Telegram. Hãy thử lại từ portal.");
+
+  await fetch(
+    `${url}/rest/v1/telegram_link_tokens?token=eq.${encodeURIComponent(linkToken)}`,
+    { method: "DELETE", headers },
+  );
+
+  if (saveResponse.ok) {
+    await reply(token, chatId, "Đã kết nối. Bạn sẽ nhận thông báo đơn xuất nội bộ tại đây.");
+  } else {
+    const detail = await saveResponse.text();
+    console.error("telegram link save failed", saveResponse.status, detail);
+    await reply(
+      token,
+      chatId,
+      `Không thể kết nối Telegram (mã ${saveResponse.status}). Hãy tạo liên kết mới từ portal rồi thử lại.`,
+    );
+  }
   return new Response("ok");
 });
