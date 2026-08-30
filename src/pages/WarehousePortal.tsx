@@ -113,14 +113,21 @@ function WarehouseLoginGate() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-100 via-sky-50 to-emerald-50 flex flex-col items-center justify-center p-6">
-      <SEO title="Hệ Thống Quản Lý Kho" />
+      <SEO
+        title="Hệ Thống Quản Lý Kho"
+        image="/1564804129_k9-logo-ps.png"
+      />
       <div className="w-full max-w-md">
         <div className="rounded-2xl bg-white shadow-xl border border-slate-100 overflow-hidden">
           <div className="h-1 bg-gradient-to-r from-sky-500 to-emerald-400" />
           <div className="p-8 space-y-6">
             <div className="text-center space-y-3">
-              <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-sky-600 text-amber-300 text-2xl shadow-md">
-                ⚡
+              <div className="inline-flex items-center justify-center">
+                <img
+                  src="/1564804129_k9-logo-ps.png"
+                  alt="K9 Logo"
+                  className="h-16 w-16 rounded-full object-cover shadow-md ring-2 ring-sky-100"
+                />
               </div>
               <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-800">
                 HỆ THỐNG VẬN HÀNH KHO
@@ -472,13 +479,20 @@ export default function WarehousePortal() {
 
   return (
     <div className="min-h-screen bg-background">
-      <SEO title="Quản Lý Kho & Đơn Hàng | K9" />
+      <SEO
+        title="Quản Lý Kho & Đơn Hàng | K9"
+        image="/1564804129_k9-logo-ps.png"
+      />
 
       <header className="border-b bg-slate-900 text-white sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="font-bold text-lg flex items-center gap-2">
-              <span className="text-amber-400">⚡</span>
+              <img
+                src="/1564804129_k9-logo-ps.png"
+                alt="K9"
+                className="h-8 w-8 rounded-full object-cover ring-1 ring-white/30"
+              />
               Quản Lý Kho &amp; Đơn Hàng
             </div>
             <p className="text-xs text-slate-300">

@@ -41,6 +41,11 @@ const SEO = ({
 
       {/* Canonical */}
       <link rel="canonical" href={url} />
+
+      {/* Favicon / tab icon */}
+      <link rel="icon" type="image/png" href="/1564804129_k9-logo-ps.png" />
+      <link rel="shortcut icon" type="image/png" href="/1564804129_k9-logo-ps.png" />
+      <link rel="apple-touch-icon" href="/1564804129_k9-logo-ps.png" />
     </Helmet>
   );
 };
