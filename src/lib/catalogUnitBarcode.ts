@@ -203,6 +203,77 @@ export function barcodeForUnit(
   return String(match.barcode ?? "").trim();
 }
 
+function foldUnitKey(u: string | null | undefined): string {
+  return String(u || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/\s+/g, "");
+}
+
+/**
+ * MOQ = unit_2_ratio khi đặt / soạn theo ĐVT cơ sở.
+ * ĐVT lớn (unit_2) đã là 1 kiện → MOQ = 1.
+ */
+export function resolveLineMoq(
+  product: {
+    unit?: string | null;
+    unit_2?: string | null;
+    unit_2_ratio?: number | null;
+  } | null | undefined,
+  lineUnit: string | null | undefined,
+): number {
+  const ratio = Number(product?.unit_2_ratio);
+  if (!Number.isFinite(ratio) || ratio <= 1) return 1;
+  const u = foldUnitKey(lineUnit);
+  const large = foldUnitKey(product?.unit_2);
+  if (large && u && u === large) return 1;
+  return ratio;
+}
+
+/**
+ * MOQ từ quy cách ĐVT đã index (ratio của unit_2).
+ * @param fallbackRatio unit_2_ratio từ catalog khi options chưa mang ratio
+ */
+export function resolveLineMoqFromOptions(
+  options: SkuUnitOption[],
+  lineUnit: string | null | undefined,
+  fallbackRatio?: number | null,
+): number {
+  const fallback =
+    Number(fallbackRatio) > 1 ? Number(fallbackRatio) : 1;
+  if (!options.length) return fallback;
+  const maxRatio = Math.max(
+    ...options.map((o) => Number(o.ratio) || 1),
+    fallback,
+    1,
+  );
+  if (maxRatio <= 1) return 1;
+  const selected = resolveUnitOption(options, String(lineUnit || ""));
+  if (selected && selected.ratio > 1) return 1;
+  return maxRatio;
+}
+
+/** SL > 0 phải là bội số MOQ. SL = 0 được phép (bỏ dòng / chưa soạn). */
+export function isQtyMultipleOfMoq(qty: number, moq: number): boolean {
+  if (!(moq > 1)) return true;
+  if (!Number.isFinite(qty) || qty < 0) return false;
+  if (qty === 0) return true;
+  const q = Math.round(qty * 1000);
+  const m = Math.round(moq * 1000);
+  return m > 0 && q % m === 0;
+}
+
+/** Làm tròn lên bội số MOQ gần nhất (vd 15, MOQ 10 → 20). */
+export function nearestMoqCeiling(qty: number, moq: number): number {
+  if (!(moq > 1) || !Number.isFinite(qty) || qty <= 0) {
+    return Math.max(0, Number(qty) || 0);
+  }
+  return Math.ceil(qty / moq) * moq;
+}
+
 export function isLoiMaSku(sku: string): boolean {
   return normalizeOrderCodeText(sku) === normalizeOrderCodeText(LOI_MA);
 }

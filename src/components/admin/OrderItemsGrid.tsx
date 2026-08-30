@@ -6,6 +6,8 @@ import { Minus, Plus, Trash2 } from "lucide-react";
 import {
   getSkuUnitOptions,
   isLoiMaSku,
+  isQtyMultipleOfMoq,
+  resolveLineMoqFromOptions,
   resolveUnitOption,
   type SkuUnitOption,
 } from "@/lib/catalogUnitBarcode";
@@ -47,6 +49,8 @@ export type OrderGridLine = {
   stockQty: number | null;
   /** Đơn giá theo ĐVT đang chọn — đổi ĐVT là syncDraftLineUnit cập nhật lại */
   price?: number;
+  /** unit_2_ratio catalog — hiển thị cột MOQ (kể cả khi ĐVT lớn → ràng buộc = 1) */
+  moq?: number;
   isCustomSku?: boolean;
 };
 
@@ -98,6 +102,12 @@ export function OrderItemsGrid({
             </TableHead>
             <TableHead className={cn(excelTh, "text-left")}>Tên hàng</TableHead>
             <TableHead className={cn(excelTh, "w-32")}>ĐVT</TableHead>
+            <TableHead
+              className={cn(excelTh, "text-right w-14 bg-orange-100")}
+              title="MOQ = unit_2_ratio · SL phải là bội số"
+            >
+              MOQ
+            </TableHead>
             <TableHead className={cn(excelTh, "text-right w-20 bg-emerald-100")}>
               Tồn
             </TableHead>
@@ -115,7 +125,7 @@ export function OrderItemsGrid({
           {lines.length === 0 ? (
             <TableRow>
               <TableCell
-                colSpan={10}
+                colSpan={11}
                 className={cn(
                   excelTd,
                   "text-center text-muted-foreground py-8 h-auto",
@@ -138,13 +148,30 @@ export function OrderItemsGrid({
                 getQty(l.maHang, l.dvt) ??
                 getQty(l.maVach, l.dvt) ??
                 l.stockQty;
+              const catalogMoq = Math.max(
+                Number(l.moq) || 0,
+                ...unitOpts.map((o) => Number(o.ratio) || 1),
+                1,
+              );
+              const displayMoq = catalogMoq > 1 ? catalogMoq : 0;
+              const moq = resolveLineMoqFromOptions(
+                unitOpts,
+                l.dvt,
+                l.moq,
+              );
+              const moqError =
+                !isCustom &&
+                !loi &&
+                moq > 1 &&
+                !isQtyMultipleOfMoq(l.quantity, moq);
               return (
                 <TableRow
                   key={l.key}
                   className={cn(
                     excelTr,
-                    (loi || isCustom) && "bg-emerald-50/70",
-                    !loi && !isCustom && idx % 2 === 1 && "bg-slate-50/70",
+                    moqError && "bg-orange-50",
+                    (loi || isCustom) && !moqError && "bg-emerald-50/70",
+                    !loi && !isCustom && !moqError && idx % 2 === 1 && "bg-slate-50/70",
                   )}
                 >
                   <TableCell
@@ -251,6 +278,24 @@ export function OrderItemsGrid({
                   <TableCell
                     className={cn(
                       excelTd,
+                      "text-right tabular-nums font-bold",
+                      displayMoq > 1
+                        ? "bg-orange-50 text-orange-800"
+                        : "text-muted-foreground",
+                    )}
+                    title={
+                      displayMoq > 1
+                        ? moq > 1
+                          ? `MOQ ${displayMoq} · SL phải là bội số của ${moq}`
+                          : `MOQ catalog ${displayMoq} · ĐVT lớn không ràng buộc bội số`
+                        : "Không có unit_2_ratio"
+                    }
+                  >
+                    {loi || isCustom ? "—" : displayMoq > 1 ? displayMoq : "—"}
+                  </TableCell>
+                  <TableCell
+                    className={cn(
+                      excelTd,
                       "text-right tabular-nums bg-emerald-50/60 font-semibold",
                       tonLive != null &&
                         tonLive < l.quantity &&
@@ -266,25 +311,41 @@ export function OrderItemsGrid({
                         size="icon"
                         variant="outline"
                         className="h-7 w-7 shrink-0"
-                        onClick={() => onQty(l.key, l.quantity - 1)}
+                        onClick={() => onQty(l.key, l.quantity - moq)}
+                        title={moq > 1 ? `Giảm ${moq}` : "Giảm 1"}
                       >
                         <Minus className="w-3 h-3" />
                       </Button>
                       <QtyInput
-                        className="w-12 text-center h-7 p-1"
+                        className={cn(
+                          "w-12 text-center h-7 p-1",
+                          moqError && "border-orange-500 text-orange-800",
+                        )}
                         value={l.quantity}
                         onValueChange={(v) => onQty(l.key, v)}
+                        step={moq}
+                        title={
+                          moqError
+                            ? `SL phải là bội số của MOQ ${moq}`
+                            : undefined
+                        }
                       />
                       <Button
                         type="button"
                         size="icon"
                         variant="outline"
                         className="h-7 w-7 shrink-0"
-                        onClick={() => onQty(l.key, l.quantity + 1)}
+                        onClick={() => onQty(l.key, l.quantity + moq)}
+                        title={moq > 1 ? `Tăng ${moq}` : "Tăng 1"}
                       >
                         <Plus className="w-3 h-3" />
                       </Button>
                     </div>
+                    {moqError ? (
+                      <div className="text-[10px] font-semibold text-orange-700 text-center mt-0.5">
+                        Bội số {moq}
+                      </div>
+                    ) : null}
                   </TableCell>
                   <TableCell
                     className={cn(excelTd, "text-right tabular-nums text-[13px]")}

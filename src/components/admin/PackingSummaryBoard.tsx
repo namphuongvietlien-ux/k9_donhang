@@ -346,6 +346,7 @@ export default function PackingSummaryBoard({
       "Mới",
       "Khóa",
       "Tồn Q7",
+      "MOQ",
       "Tổng cần soạn",
       ...branchCodes.map((b) => b.label),
       "Cảnh báo",
@@ -363,9 +364,14 @@ export default function PackingSummaryBoard({
         r.isNew ? "MỚI" : "",
         r.isLocked ? "KHÓA" : "",
         r.stockMapped ? r.stockOnHand : "",
+        r.moq > 1 ? r.moq : "",
         r.orderedQty,
         ...branchCodes.map((b) => r.byBranch[b.code] || 0),
-        short ? `THIẾU ${r.orderedQty - r.stockOnHand}` : "OK",
+        short
+          ? `THIẾU ${r.orderedQty - r.stockOnHand}`
+          : r.moq > 1 && r.orderedQty % r.moq !== 0
+            ? `LỆCH MOQ (${r.moq})`
+            : "OK",
       ]);
     }
     const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -453,10 +459,15 @@ export default function PackingSummaryBoard({
         `<td>${escapeHtml(r.productName)}</td>` +
         `<td>${escapeHtml(r.unit || "")}</td>` +
         `<td class="num">${r.stockMapped ? r.stockOnHand : ""}</td>` +
+        `<td class="num bold">${r.moq > 1 ? r.moq : ""}</td>` +
         `<td class="num bold">${r.orderedQty}</td>` +
         branchTd +
-        `<td class="${short ? "warn" : "ok"}">${
-          short ? `THIẾU ${r.orderedQty - r.stockOnHand}` : "OK"
+        `<td class="${short || (r.moq > 1 && r.orderedQty % r.moq !== 0) ? "warn" : "ok"}">${
+          short
+            ? `THIẾU ${r.orderedQty - r.stockOnHand}`
+            : r.moq > 1 && r.orderedQty % r.moq !== 0
+              ? `LỆCH MOQ (${r.moq})`
+              : "OK"
         }</td></tr>`;
     }
     const html =
@@ -484,7 +495,7 @@ export default function PackingSummaryBoard({
       `<div class="toolbar"><button onclick="window.print()">🖨️ In</button></div>` +
       `<h1>Bảng tổng hợp soạn hàng</h1>` +
       `<div class="sub">${escapeHtml(dateLabel)} · ${escapeHtml(MODE_LABELS[mode])} · ${rows.length} SKU · ${orders.length} phiếu</div>` +
-      `<table><thead><tr><th>STT</th><th>Mã hàng</th><th>Mã vạch</th><th>Tên hàng</th><th>ĐVT</th><th>Tồn Q7</th><th>Tổng cần soạn</th>${branchTh}<th>Cảnh báo</th></tr></thead><tbody>${body}</tbody></table>` +
+      `<table><thead><tr><th>STT</th><th>Mã hàng</th><th>Mã vạch</th><th>Tên hàng</th><th>ĐVT</th><th>Tồn Q7</th><th>MOQ</th><th>Tổng cần soạn</th>${branchTh}<th>Cảnh báo</th></tr></thead><tbody>${body}</tbody></table>` +
       `</body></html>`;
 
     const w = window.open("", "_blank");
@@ -671,6 +682,12 @@ export default function PackingSummaryBoard({
                     Tồn Q7
                   </TableHead>
                   <TableHead
+                    className={cn(excelTh, "text-right w-16 bg-orange-100")}
+                    title="MOQ = unit_2_ratio · tổng cần soạn phải là bội số"
+                  >
+                    MOQ
+                  </TableHead>
+                  <TableHead
                     className={cn(excelTh, "text-right bg-sky-100 font-bold")}
                   >
                     Tổng cần soạn
@@ -748,7 +765,26 @@ export default function PackingSummaryBoard({
                         {r.stockMapped ? r.stockOnHand : "—"}
                       </TableCell>
 
-                      {/* Cột 7: Tổng cần soạn */}
+                      {/* Cột 7: MOQ (unit_2_ratio) */}
+                      <TableCell
+                        className={cn(
+                          excelTd,
+                          "text-right tabular-nums font-bold text-base",
+                          r.moq > 1
+                            ? "bg-orange-50 text-orange-800"
+                            : "text-muted-foreground",
+                          moqError && "ring-1 ring-inset ring-orange-500",
+                        )}
+                        title={
+                          r.moq > 1
+                            ? `MOQ ${r.moq} (unit_2_ratio) · tổng cần soạn phải là bội số`
+                            : "Không có unit_2_ratio trên danh mục"
+                        }
+                      >
+                        {r.moq > 1 ? r.moq : "—"}
+                      </TableCell>
+
+                      {/* Cột 8: Tổng cần soạn */}
                       <TableCell className={cn(excelTd, "text-right tabular-nums bg-sky-50/60 font-bold")}>
                         {r.orderedQty}
                       </TableCell>

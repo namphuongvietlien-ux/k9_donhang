@@ -37,8 +37,10 @@ import {
 import {
   expandProductUnitOptions,
   getSkuUnitOptions,
-  isLoiMaSku,
+  isQtyMultipleOfMoq,
   resolveAvailableVariants,
+  resolveLineMoq,
+  resolveLineMoqFromOptions,
   type CatalogProductRow,
   type SkuUnitOption,
 } from "@/lib/catalogUnitBarcode";
@@ -89,6 +91,8 @@ interface CartLine {
   productId: string | null;
   price: number;
   stockQty: number | null;
+  /** unit_2_ratio từ catalog — hiển thị MOQ */
+  moq?: number;
   /** SKU gõ tay / không có trong catalog — mở khóa tên/ĐVT/MV */
   isCustomSku?: boolean;
 }
@@ -110,7 +114,9 @@ interface CatalogHit {
   unit: string | null;
   unit_2: string | null;
   barcode_2: string | null;
+  unit_2_ratio?: number | null;
   price: number;
+  price_2?: number | null;
   parent_sku?: string | null;
   is_new?: boolean;
   is_locked?: boolean;
@@ -280,7 +286,9 @@ const CreateWarehouseOrderForm = forwardRef<
         unit: p.unit,
         unit_2: p.unit_2 || null,
         barcode_2: p.barcode_2 || null,
+        unit_2_ratio: Number(p.unit_2_ratio) || null,
         price: Number(p.price) || 0,
+        price_2: Number(p.price_2) || null,
         parent_sku: p.parent_sku || null,
         is_new: !!p.is_new,
         is_locked: !!p.is_locked,
@@ -360,6 +368,9 @@ const CreateWarehouseOrderForm = forwardRef<
     const unit = picked?.unit || p.unit || "cái";
     const barcode = picked?.barcode || p.barcode || "";
 
+    const catalogMoq = Number(p.unit_2_ratio) > 1 ? Number(p.unit_2_ratio) : 1;
+    const moq = resolveLineMoq(p, unit);
+
     setLines((prev) => {
       const exist = prev.find(
         (l) =>
@@ -368,7 +379,9 @@ const CreateWarehouseOrderForm = forwardRef<
       );
       if (exist) {
         return prev.map((l) =>
-          l.key === exist.key ? { ...l, quantity: l.quantity + 1 } : l,
+          l.key === exist.key
+            ? { ...l, quantity: l.quantity + moq, moq: catalogMoq }
+            : l,
         );
       }
       return [
@@ -379,10 +392,11 @@ const CreateWarehouseOrderForm = forwardRef<
           tenHang: p.name,
           dvt: unit,
           unitOptions: opts,
-          quantity: 1,
+          quantity: moq,
           productId: picked?.productId || p.id,
           price: picked?.price ?? p.price ?? 0,
           stockQty: getQty(ma, unit),
+          moq: catalogMoq,
         },
         ...prev,
       ];
@@ -501,10 +515,25 @@ const CreateWarehouseOrderForm = forwardRef<
     setLines((prev) =>
       prev.map((l) => {
         if (l.key !== key) return l;
-        return syncDraftLineUnit(l, dvt, {
+        const synced = syncDraftLineUnit(l, dvt, {
           skuUnitIndex,
           getStockQty: (ma, unit) => getQty(ma, unit),
         });
+        
+        const hit = catalogList.find(
+          (p) =>
+            p.id === l.productId ||
+            normalizeOrderCodeText(p.slug) ===
+              normalizeOrderCodeText(l.maHang),
+        );
+        const catalogMoq =
+          Number(hit?.unit_2_ratio) > 1 ? Number(hit!.unit_2_ratio) : 1;
+        const moq = resolveLineMoq(hit, dvt);
+        synced.moq = catalogMoq;
+        if (moq > 1 && !isQtyMultipleOfMoq(synced.quantity, moq)) {
+          synced.quantity = moq;
+        }
+        return synced;
       }),
     );
   };
@@ -540,6 +569,35 @@ const CreateWarehouseOrderForm = forwardRef<
       toast({
         title: "Thiếu mã hàng",
         description: "Mỗi dòng cần có mã hàng trước khi lưu.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const lineMoq = (l: CartLine) => {
+      const hit = catalogList.find(
+        (p) =>
+          normalizeOrderCodeText(p.slug) ===
+          normalizeOrderCodeText(l.maHang),
+      );
+      if (hit && Number(hit.unit_2_ratio) > 1) {
+        return resolveLineMoq(hit, l.dvt);
+      }
+      return resolveLineMoqFromOptions(
+        getSkuUnitOptions(skuUnitIndex, l.maHang),
+        l.dvt,
+        l.moq ?? hit?.unit_2_ratio,
+      );
+    };
+    const moqBad = preparedLines.find((l) => {
+      if (l.quantity <= 0 || l.isCustomSku) return false;
+      return !isQtyMultipleOfMoq(l.quantity, lineMoq(l));
+    });
+    if (moqBad) {
+      const moq = lineMoq(moqBad);
+      toast({
+        title: "SL không đúng bội số MOQ",
+        description: `${moqBad.maHang}: SL ${moqBad.quantity} phải là bội số của ${moq}.`,
         variant: "destructive",
       });
       return;
@@ -739,7 +797,7 @@ const CreateWarehouseOrderForm = forwardRef<
             }
             hint={
               <p className="text-[11px] text-muted-foreground">
-                Quét khớp → +1. Không tìm thấy → thêm dòng{" "}
+                Quét khớp → +MOQ. Không tìm thấy → thêm dòng{" "}
                 <strong>Lỗi Mã</strong> (không chặn lưu).
               </p>
             }
@@ -793,10 +851,12 @@ const CreateWarehouseOrderForm = forwardRef<
                 getQty(p.slug, p.unit) ??
                 getQty(p.barcode || "", p.unit) ??
                 getQty(p.barcode_2 || "", p.unit_2);
+              const moq = resolveLineMoq(p, p.unit);
               return (
                 <>
                   {" "}
                   • Tồn: {ton != null ? ton : "—"}
+                  {moq > 1 ? ` • MOQ: ${moq}` : ""}
                 </>
               );
             }}

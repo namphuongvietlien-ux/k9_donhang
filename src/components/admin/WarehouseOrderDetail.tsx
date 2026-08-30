@@ -9,6 +9,7 @@ import {
   Loader2,
   Plus,
   Printer,
+  RefreshCw,
   RotateCcw,
   Save,
   Trash2,
@@ -45,8 +46,12 @@ import {
   buildSkuUnitIndex,
   expandProductUnitOptions,
   getSkuUnitOptions,
+  isQtyMultipleOfMoq,
+  nearestMoqCeiling,
   resolveUnitOption,
   resolveAvailableVariants,
+  resolveLineMoq,
+  resolveLineMoqFromOptions,
   barcodeForUnit,
   type CatalogProductRow,
 } from "@/lib/catalogUnitBarcode";
@@ -69,6 +74,16 @@ import {
 import { notifyWarehouseEvent } from "@/lib/telegramNotify";
 import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import ProductFlagBadges from "@/components/admin/ProductFlagBadges";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -171,6 +186,7 @@ export default function WarehouseOrderDetail({
     getQty,
     getVerifiedQty,
     loading: stockLoading,
+    refetch: refetchStock,
   } = useStock(stockWhId);
   const { toast } = useToast();
 
@@ -183,6 +199,18 @@ export default function WarehouseOrderDetail({
   >({});
   /** Chế độ xem chi tiết giá — hiện cột Đơn giá / Thành tiền */
   const [showPrice, setShowPrice] = useState(false);
+  /** Xác nhận lưu soạn khi có dòng lệch MOQ */
+  const [moqConfirmOpen, setMoqConfirmOpen] = useState(false);
+  const [moqViolations, setMoqViolations] = useState<
+    {
+      itemId: string;
+      slug: string;
+      name: string;
+      qty: number;
+      moq: number;
+      suggest: number;
+    }[]
+  >([]);
   const [exportingTransfer, setExportingTransfer] = useState(false);
   const [unitBusyId, setUnitBusyId] = useState<string | null>(null);
   const [savingConfirm, setSavingConfirm] = useState(false);
@@ -223,6 +251,42 @@ export default function WarehouseOrderDetail({
     () => buildSkuUnitIndex(catalogList as CatalogProductRow[]),
     [catalogList],
   );
+
+  const productOfSlug = (slug: string | null | undefined) => {
+    const key = normalizeOrderCodeText(slug || "");
+    return catalogList.find((p) => normalizeOrderCodeText(p.slug) === key);
+  };
+
+  /** unit_2_ratio từ catalog — luôn dùng để HIỂN THỊ cột MOQ */
+  const catalogMoqOf = (slug: string | null | undefined) => {
+    const product = productOfSlug(slug);
+    const ratio = Number(product?.unit_2_ratio);
+    if (Number.isFinite(ratio) && ratio > 1) return ratio;
+    const opts = getSkuUnitOptions(skuUnitIndex, slug || "");
+    const maxRatio = Math.max(
+      ...opts.map((o) => Number(o.ratio) || 1),
+      1,
+    );
+    return maxRatio > 1 ? maxRatio : 0;
+  };
+
+  /**
+   * MOQ hiệu lực theo ĐVT dòng: ĐVT cơ sở → unit_2_ratio; ĐVT lớn → 1.
+   * Ưu tiên products.unit_2_ratio (không phụ thuộc có khai báo unit_2).
+   */
+  const moqOf = (
+    slug: string | null | undefined,
+    unit: string | null | undefined,
+  ) => {
+    const product = productOfSlug(slug);
+    if (product && Number(product.unit_2_ratio) > 1) {
+      return resolveLineMoq(product, unit);
+    }
+    return resolveLineMoqFromOptions(
+      getSkuUnitOptions(skuUnitIndex, slug || ""),
+      unit,
+    );
+  };
 
   // Mã vạch chỉ khớp exact/prefix — quy tắc nằm trong filterCatalogSuggestions.
   const suggestions = useMemo(
@@ -344,12 +408,13 @@ export default function WarehouseOrderDetail({
       unitOpts[0] ||
       null;
 
+    const pickedUnit = match?.unit || p.unit || "cái";
     setNewSlug(ma);
     setNewName(p.name);
-    setNewUnit(match?.unit || p.unit || "cái");
+    setNewUnit(pickedUnit);
     setNewBarcode(match?.barcode || p.barcode || "");
     setNewPrice(match?.price ?? p.price ?? 0);
-    setNewQty(1);
+    setNewQty(resolveLineMoq(p, pickedUnit));
     setScan(ma);
     setSuggestOpen(false);
     focusQty();
@@ -530,7 +595,18 @@ export default function WarehouseOrderDetail({
       focusScan();
       return;
     }
-    const qty = Math.max(1, Number(newQty) || 1);
+    const moq = moqOf(slug, unit);
+    let qty = Math.max(1, Number(newQty) || 1);
+    if (qty === 1 && moq > 1) qty = moq;
+    if (!isQtyMultipleOfMoq(qty, moq)) {
+      toast({
+        title: "SL không đúng bội số MOQ",
+        description: `${slug}: SL ${qty} phải là bội số của ${moq}.`,
+        variant: "destructive",
+      });
+      focusQty();
+      return;
+    }
     const dup = order?.order_items.some(
       (it) =>
         normalizeOrderCodeText(it.product_slug || "") === slug &&
@@ -646,6 +722,10 @@ export default function WarehouseOrderDetail({
       setNewBarcode(match.barcode);
       setNewPrice(Number(match.price) || 0);
     }
+    const moq = moqOf(newSlug, dvt);
+    setNewQty((q) =>
+      moq > 1 && !isQtyMultipleOfMoq(q, moq) ? moq : Math.max(1, q),
+    );
   };
 
   if (isLoading || !order) {
@@ -674,22 +754,68 @@ export default function WarehouseOrderDetail({
         ? packed[it.id] ?? it.qty_packed ?? it.qty_requested ?? it.quantity
         : reqDraft[it.id] ?? it.qty_requested ?? it.quantity,
     ) || 0;
-  const isItemStockShort = (it: typeof order.order_items[number]) => {
-    const requiredQty = Number(it.qty_requested ?? it.quantity) || 0;
-    const availableQty =
-      getVerifiedQty(it.product_slug, lineUnit(it)) ??
-      getVerifiedQty(lineBarcode(it), lineUnit(it));
-    return availableQty == null || availableQty < requiredQty;
+  /** Tồn dùng quyết định thiếu / xuất — ưu tiên SOH, fallback getQty (sau khi điều chỉnh tồn). */
+  const availableOf = (it: typeof order.order_items[number]) => {
+    const unit = lineUnit(it);
+    return (
+      getVerifiedQty(it.product_slug, unit) ??
+      getVerifiedQty(lineBarcode(it), unit) ??
+      getQty(it.product_slug, unit) ??
+      getQty(lineBarcode(it), unit) ??
+      null
+    );
   };
-  const exportableOrderItems = order.order_items.filter(
-    (it) => !it.is_out_stock && !it.is_locked && !isItemStockShort(it),
-  );
+  const packedQtyOf = (it: typeof order.order_items[number]) =>
+    Number(
+      packed[it.id] ?? it.qty_packed ?? it.qty_requested ?? it.quantity,
+    ) || 0;
+  /** SL yêu cầu > tồn — nhắc nhẹ (vẫn có thể soạn ít hơn). */
+  const isReqOverStock = (it: typeof order.order_items[number]) => {
+    const requiredQty = Number(it.qty_requested ?? it.quantity) || 0;
+    if (requiredQty <= 0) return false;
+    const availableQty = availableOf(it);
+    if (availableQty == null) return false;
+    return availableQty < requiredQty;
+  };
+  /**
+   * SL soạn > tồn → không xuất (màu đỏ).
+   * Khi bấm “→ tồn” (SL soạn ≤ tồn) → hết trạng thái này, đổi màu available.
+   */
+  const isPackOverStock = (it: typeof order.order_items[number]) => {
+    const qty = packedQtyOf(it);
+    if (qty <= 0) return false;
+    const availableQty = availableOf(it);
+    if (availableQty == null) return false;
+    return qty > availableQty;
+  };
+  /** Backward-compatible alias: soạn hàng dùng pack-over-stock; quản lý dùng req-over-stock. */
+  const isItemStockShort = (it: typeof order.order_items[number]) =>
+    variant === "packing" ? isPackOverStock(it) : isReqOverStock(it);
+  /** Xuất phiếu: SL soạn > 0 và không vượt tồn. */
+  const exportableOrderItems = order.order_items.filter((it) => {
+    if (it.is_out_stock || it.is_locked) return false;
+    const qty = packedQtyOf(it);
+    if (qty <= 0) return false;
+    const availableQty = availableOf(it);
+    if (availableQty != null && qty > availableQty) return false;
+    return true;
+  });
   const displayOrderItems = variant === "packing"
-    ? [...order.order_items].sort(
-      (left, right) => Number(isItemStockShort(left)) - Number(isItemStockShort(right)),
-    )
+    ? [...order.order_items].sort((left, right) => {
+        // Không xuất (SL soạn > tồn) xuống cuối; đã hạ SL theo tồn lên trên
+        const leftBlock = Number(isPackOverStock(left));
+        const rightBlock = Number(isPackOverStock(right));
+        if (leftBlock !== rightBlock) return leftBlock - rightBlock;
+        return Number(isReqOverStock(left)) - Number(isReqOverStock(right));
+      })
     : order.order_items;
-  const hiddenPackingItemCount = order.order_items.filter(isItemStockShort).length;
+  const hiddenPackingItemCount = order.order_items.filter(isPackOverStock).length;
+  const adjustedPackingItemCount = order.order_items.filter(
+    (it) =>
+      isReqOverStock(it) &&
+      !isPackOverStock(it) &&
+      packedQtyOf(it) > 0,
+  ).length;
 
   /** Tổng cộng cuối bảng — dùng cho cả Quản lý và Soạn hàng */
   const footerTotals = displayOrderItems.reduce(
@@ -917,7 +1043,24 @@ export default function WarehouseOrderDetail({
     }
   };
 
-  const handleSavePack = async () => {
+  const collectPackMoqViolations = () =>
+    order.order_items
+      .map((it) => {
+        const qty = packedQtyOf(it);
+        const moq = moqOf(it.product_slug, lineUnit(it));
+        if (isQtyMultipleOfMoq(qty, moq)) return null;
+        return {
+          itemId: it.id,
+          slug: it.product_slug || "",
+          name: it.product_name,
+          qty,
+          moq,
+          suggest: nearestMoqCeiling(qty, moq),
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => !!row);
+
+  const persistPacking = async (acknowledgeMoq: boolean) => {
     try {
       const lines = order.order_items.map((it) => {
         const rawPacked =
@@ -943,9 +1086,68 @@ export default function WarehouseOrderDetail({
       });
 
       await refetch();
+      setMoqConfirmOpen(false);
+      setMoqViolations([]);
       toast({
         title: "Đã lưu soạn hàng",
-        description: order.order_code || "",
+        description:
+          (order.order_code || "") +
+          (acknowledgeMoq ? " · đã chấp nhận lệch MOQ" : ""),
+      });
+    } catch (e) {
+      toast({
+        title: "Lỗi soạn hàng",
+        description: e instanceof Error ? e.message : "Lỗi",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSavePack = async () => {
+    const violations = collectPackMoqViolations();
+    if (violations.length) {
+      setMoqViolations(violations);
+      setMoqConfirmOpen(true);
+      return;
+    }
+    await persistPacking(false);
+  };
+
+  const applyMoqSuggestionsAndSave = async () => {
+    setPacked((prev) => {
+      const next = { ...prev };
+      for (const v of moqViolations) {
+        next[v.itemId] = v.suggest;
+      }
+      return next;
+    });
+    // Đợi state packed cập nhật một tick rồi lưu với số đề xuất
+    const lines = order.order_items.map((it) => {
+      const violation = moqViolations.find((v) => v.itemId === it.id);
+      const rawPacked = violation
+        ? violation.suggest
+        : packed[it.id] ??
+          it.qty_packed ??
+          it.qty_requested ??
+          it.quantity;
+      const qtyPacked = Number.isFinite(Number(rawPacked))
+        ? Math.max(0, Number(rawPacked))
+        : 0;
+      return {
+        itemId: it.id,
+        qtyPacked,
+        unit: lineUnit(it) || it.unit || null,
+        barcode: lineBarcode(it) || it.barcode || null,
+      };
+    });
+    try {
+      await savePacking.mutateAsync({ orderId: order.id, lines });
+      await refetch();
+      setMoqConfirmOpen(false);
+      setMoqViolations([]);
+      toast({
+        title: "Đã lưu soạn hàng",
+        description: `${order.order_code || ""} · đã làm tròn theo MOQ`,
       });
     } catch (e) {
       toast({
@@ -958,6 +1160,22 @@ export default function WarehouseOrderDetail({
 
   /** GAS ql_luuSua — xác nhận lưu sửa SL yêu cầu trên Quản Lý */
   const handleSaveConfirm = async () => {
+    const moqBad = order.order_items.find((it) => {
+      const qty = Number(reqDraft[it.id] ?? it.qty_requested ?? it.quantity) || 0;
+      return !isQtyMultipleOfMoq(qty, moqOf(it.product_slug, lineUnit(it)));
+    });
+    if (moqBad) {
+      const moq = moqOf(moqBad.product_slug, lineUnit(moqBad));
+      const qty =
+        Number(reqDraft[moqBad.id] ?? moqBad.qty_requested ?? moqBad.quantity) ||
+        0;
+      toast({
+        title: "SL không đúng bội số MOQ",
+        description: `${moqBad.product_slug || moqBad.product_name}: SL ${qty} phải là bội số của ${moq}.`,
+        variant: "destructive",
+      });
+      return;
+    }
     const changes = order.order_items.filter((it) => {
       const cur = it.qty_requested ?? it.quantity;
       const draft = reqDraft[it.id];
@@ -1237,6 +1455,28 @@ export default function WarehouseOrderDetail({
               Lưu xác nhận
             </Button>
           )}
+          {variant === "packing" && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void refetchStock().then(() =>
+                  toast({
+                    title: "Đã tải lại tồn",
+                    description:
+                      "SL soạn ≤ tồn → đủ xuất (xanh). SL soạn > tồn → không xuất (đỏ).",
+                  }),
+                );
+              }}
+              disabled={stockLoading}
+              title="Tải lại tồn kho nguồn — mã đủ tồn sẽ hết cảnh báo thiếu"
+            >
+              <RefreshCw
+                className={cn("w-4 h-4 mr-1", stockLoading && "animate-spin")}
+              />
+              Tải lại tồn
+            </Button>
+          )}
           {!locked && variant === "packing" && (
             <Button
               variant="outline"
@@ -1333,6 +1573,9 @@ export default function WarehouseOrderDetail({
                             <>
                               {" "}
                               · Tồn: {ton != null ? ton : "—"}
+                              {resolveLineMoq(p, p.unit) > 1
+                                ? ` · MOQ: ${resolveLineMoq(p, p.unit)}`
+                                : ""}
                             </>
                           }
                           onSelect={() => pickProduct(p)}
@@ -1406,14 +1649,29 @@ export default function WarehouseOrderDetail({
             ) : null}
 
             <div className="space-y-1">
-              <Label className="text-xs">Số lượng</Label>
+              <Label className="text-xs">
+                Số lượng
+                {newSlug && moqOf(newSlug, newUnit) > 1 ? (
+                  <span className="ml-1 text-orange-700 font-semibold">
+                    MOQ {moqOf(newSlug, newUnit)}
+                  </span>
+                ) : null}
+              </Label>
               <QtyInput
                 ref={qtyRef}
-                className="w-24 h-10 text-base font-bold border-2 border-sky-400"
+                className={cn(
+                  "w-24 h-10 text-base font-bold border-2",
+                  newSlug &&
+                    moqOf(newSlug, newUnit) > 1 &&
+                    !isQtyMultipleOfMoq(newQty, moqOf(newSlug, newUnit))
+                    ? "border-orange-500 text-orange-800"
+                    : "border-sky-400",
+                )}
                 compact={false}
                 value={newQty}
                 onValueChange={(v) => setNewQty(Math.max(1, v))}
                 min={1}
+                step={newSlug ? moqOf(newSlug, newUnit) : 1}
                 onKeyDown={(e) => {
                   if (e.key !== "Enter") return;
                   e.preventDefault();
@@ -1443,6 +1701,9 @@ export default function WarehouseOrderDetail({
               {newName ? ` — ${newName}` : ""}
               {newBarcode ? ` · MV: ${newBarcode}` : ""}
               {newUnit ? ` · ĐVT: ${newUnit}` : ""}
+              {moqOf(newSlug, newUnit) > 1
+                ? ` · MOQ: ${moqOf(newSlug, newUnit)}`
+                : ""}
               {newPrice > 0 ? (
                 <span className="text-emerald-700 font-semibold">
                   {` · Đơn giá: ${vnd(newPrice)}đ`}
@@ -1458,9 +1719,31 @@ export default function WarehouseOrderDetail({
       )}
 
       <div className={cn(excelTableWrap, "max-h-[calc(96vh-18rem)] min-h-[22rem]")}>
-        {variant === "packing" && hiddenPackingItemCount > 0 ? (
-          <div className="sticky top-0 z-20 border-b border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800">
-            {hiddenPackingItemCount} mã thiếu tồn đã được đưa xuống cuối danh sách và không xuất ra phiếu.
+        {variant === "packing" &&
+        (hiddenPackingItemCount > 0 || adjustedPackingItemCount > 0) ? (
+          <div
+            className={cn(
+              "sticky top-0 z-20 border-b px-3 py-2 text-xs font-semibold",
+              hiddenPackingItemCount > 0
+                ? "border-red-200 bg-red-50 text-red-800"
+                : "border-emerald-200 bg-emerald-50 text-emerald-800",
+            )}
+          >
+            {hiddenPackingItemCount > 0 ? (
+              <>
+                {hiddenPackingItemCount} mã <strong>không xuất</strong> vì SL
+                soạn &gt; tồn — xếp cuối. Bấm <strong>→ tồn</strong> để hạ SL
+                soạn = tồn thì đổi sang màu xanh và được xuất.
+              </>
+            ) : null}
+            {adjustedPackingItemCount > 0 ? (
+              <>
+                {hiddenPackingItemCount > 0 ? " " : null}
+                {adjustedPackingItemCount} mã đã hạ SL soạn ≤ tồn —{" "}
+                <strong>đủ xuất</strong> (màu xanh).
+              </>
+            ) : null}{" "}
+            Bấm <strong>Tải lại tồn</strong> nếu vừa chỉnh tồn kho.
           </div>
         ) : null}
         <Table stickyHeader>
@@ -1487,6 +1770,12 @@ export default function WarehouseOrderDetail({
               )}
               <TableHead className={cn(excelTh, "text-right bg-emerald-100")}>
                 Tồn
+              </TableHead>
+              <TableHead
+                className={cn(excelTh, "text-right w-16 bg-orange-100")}
+                title="MOQ = unit_2_ratio · SL phải là bội số"
+              >
+                MOQ
               </TableHead>
               <TableHead className={cn(excelTh, "text-right bg-sky-100")}>
                 SL yêu cầu
@@ -1521,19 +1810,37 @@ export default function WarehouseOrderDetail({
                 getQty(it.product_slug, displayUnit) ??
                 getQty(displayBarcode, displayUnit) ??
                 getQty(it.product_name, displayUnit);
-              const stockShort = isItemStockShort(it);
+              const packOverStock = isPackOverStock(it);
+              const reqOverStock = isReqOverStock(it);
+              const packFitsStock =
+                variant === "packing" &&
+                reqOverStock &&
+                !packOverStock &&
+                packedQtyOf(it) > 0;
+              /** Đỏ = không xuất; xanh = đã hạ SL theo tồn / đủ xuất */
+              const stockShort = variant === "packing" ? packOverStock : reqOverStock;
               const unitPrice = linePrice(it);
               const moneyQty = lineQtyForMoney(it);
+              const catalogMoq = catalogMoqOf(it.product_slug);
+              const moq = moqOf(it.product_slug, displayUnit);
+              const qtyForMoq = Number(
+                variant === "packing"
+                  ? packed[it.id] ?? it.qty_packed ?? req
+                  : reqDraft[it.id] ?? req,
+              ) || 0;
+              const moqError = moq > 1 && !isQtyMultipleOfMoq(qtyForMoq, moq);
               return (
                 <TableRow
                   key={it.id}
                   className={cn(
                     excelTr,
+                    moqError && !packFitsStock && "bg-orange-50",
                     mismatch && QTY_MISMATCH_ROW[mismatch],
-                    !mismatch && soft && "bg-amber-50/70",
+                    !mismatch && !moqError && soft && "bg-amber-50/70",
                     it.is_out_stock && "opacity-60",
                     it.is_locked && "opacity-75",
                     stockShort && "bg-red-50/80 opacity-60",
+                    packFitsStock && !moqError && "bg-emerald-50/90",
                   )}
                 >
                   <TableCell
@@ -1565,10 +1872,29 @@ export default function WarehouseOrderDetail({
                         {QTY_MISMATCH_HINT[mismatch]}
                       </div>
                     ) : null}
+                    {moqError ? (
+                      <div className="mt-0.5 flex items-center gap-1 text-[10px] font-bold text-orange-700">
+                        <AlertTriangle className="w-3 h-3 shrink-0" />
+                        Lệch MOQ ({moq})
+                      </div>
+                    ) : null}
                     {stockShort ? (
                       <div className="mt-0.5 flex items-center gap-1 text-[10px] font-bold text-red-700">
                         <AlertTriangle className="w-3 h-3 shrink-0" />
-                        Thiếu tồn - không xuất
+                        Không xuất — SL soạn {packedQtyOf(it)} &gt; tồn{" "}
+                        {availableOf(it) ?? "—"}
+                        {reqOverStock
+                          ? ` (yêu cầu ${Number(it.qty_requested ?? it.quantity) || 0})`
+                          : ""}
+                      </div>
+                    ) : null}
+                    {packFitsStock ? (
+                      <div className="mt-0.5 flex items-center gap-1 text-[10px] font-bold text-emerald-700">
+                        Đủ xuất — SL soạn {packedQtyOf(it)} ≤ tồn{" "}
+                        {availableOf(it) ?? "—"}
+                        {reqOverStock
+                          ? ` (yêu cầu ${Number(it.qty_requested ?? it.quantity) || 0})`
+                          : ""}
                       </div>
                     ) : null}
                     {soft ? (
@@ -1690,6 +2016,25 @@ export default function WarehouseOrderDetail({
                   >
                     {ton != null ? ton : "—"}
                   </TableCell>
+                  <TableCell
+                    className={cn(
+                      excelTd,
+                      "text-right tabular-nums font-bold text-base",
+                      catalogMoq > 1
+                        ? "bg-orange-50 text-orange-800"
+                        : "text-muted-foreground",
+                      moqError && "ring-1 ring-inset ring-orange-500",
+                    )}
+                    title={
+                      catalogMoq > 1
+                        ? moq > 1
+                          ? `MOQ ${catalogMoq} (unit_2_ratio) · SL phải là bội số của ${moq}`
+                          : `MOQ catalog ${catalogMoq} · ĐVT lớn không ràng buộc bội số`
+                        : "Không có unit_2_ratio trên danh mục"
+                    }
+                  >
+                    {catalogMoq > 1 ? catalogMoq : "—"}
+                  </TableCell>
                   <TableCell className={cn(excelTd, "text-right bg-sky-50/40")}>
                     {locked || variant === "packing" ? (
                       <span className="tabular-nums text-sm">
@@ -1697,13 +2042,22 @@ export default function WarehouseOrderDetail({
                       </span>
                     ) : (
                       <QtyInput
-                        className="w-16 ml-auto"
+                        className={cn(
+                          "w-16 ml-auto",
+                          moqError && "border-orange-500 text-orange-800",
+                        )}
                         value={reqDraft[it.id] ?? req}
                         onValueChange={(v) =>
                           setReqDraft((d) => ({
                             ...d,
                             [it.id]: Math.max(0, v),
                           }))
+                        }
+                        step={moq}
+                        title={
+                          moqError
+                            ? `SL phải là bội số của MOQ ${moq}`
+                            : undefined
                         }
                       />
                     )}
@@ -1714,25 +2068,76 @@ export default function WarehouseOrderDetail({
                         {it.qty_packed ?? "—"}
                       </span>
                     ) : (
-                      <QtyInput
-                        className={cn(
-                          "w-16 ml-auto",
-                          stockShort && "border-red-400 bg-red-100 text-red-800",
-                          mismatch === "short" && "border-red-400 text-red-800",
-                          mismatch === "over" &&
-                            "border-amber-400 text-amber-900",
-                        )}
-                        value={
-                          packed[it.id] ??
-                          it.qty_packed ??
-                          it.qty_requested ??
-                          it.quantity
-                        }
-                        onValueChange={(v) =>
-                          setPacked((p) => ({ ...p, [it.id]: v }))
-                        }
-                        disabled={stockShort}
-                      />
+                      <div className="flex flex-col items-end gap-0.5">
+                        <QtyInput
+                          className={cn(
+                            "w-16 ml-auto",
+                            stockShort &&
+                              "border-red-400 bg-red-100 text-red-800",
+                            mismatch === "short" &&
+                              "border-red-400 text-red-800",
+                            mismatch === "over" &&
+                              "border-amber-400 text-amber-900",
+                            moqError && "border-orange-500 text-orange-800",
+                          )}
+                          step={1}
+                          title={
+                            moqError
+                              ? `Lệch MOQ ${moq} — đề xuất ${nearestMoqCeiling(qtyForMoq, moq)}`
+                              : stockShort
+                                ? "Thiếu tồn — có thể nhập SL soạn ≤ tồn"
+                                : undefined
+                          }
+                          value={
+                            packed[it.id] ??
+                            it.qty_packed ??
+                            it.qty_requested ??
+                            it.quantity
+                          }
+                          onValueChange={(v) =>
+                            setPacked((p) => ({ ...p, [it.id]: v }))
+                          }
+                        />
+                        {variant === "packing" && moqError ? (
+                          <button
+                            type="button"
+                            className="text-[10px] font-semibold text-orange-700 underline hover:text-orange-900"
+                            onClick={() =>
+                              setPacked((p) => ({
+                                ...p,
+                                [it.id]: nearestMoqCeiling(qtyForMoq, moq),
+                              }))
+                            }
+                            title={`Làm tròn lên bội số MOQ ${moq}`}
+                          >
+                            → {nearestMoqCeiling(qtyForMoq, moq)}
+                          </button>
+                        ) : null}
+                        {variant === "packing" &&
+                        (packOverStock || reqOverStock) &&
+                        availableOf(it) != null &&
+                        availableOf(it)! >= 0 &&
+                        packedQtyOf(it) !== availableOf(it) ? (
+                          <button
+                            type="button"
+                            className={cn(
+                              "text-[10px] font-semibold underline",
+                              packOverStock
+                                ? "text-red-700 hover:text-red-900"
+                                : "text-emerald-700 hover:text-emerald-900",
+                            )}
+                            onClick={() =>
+                              setPacked((p) => ({
+                                ...p,
+                                [it.id]: Math.max(0, availableOf(it)!),
+                              }))
+                            }
+                            title="Đặt SL soạn = tồn → đủ xuất"
+                          >
+                            → tồn {availableOf(it)}
+                          </button>
+                        ) : null}
+                      </div>
                     )}
                   </TableCell>
                   <TableCell
@@ -1810,6 +2215,11 @@ export default function WarehouseOrderDetail({
               )}
               <TableCell className={cn(excelTf, "text-right")} />
               <TableCell
+                className={cn(excelTf, "text-right bg-orange-50 text-orange-800 text-[11px]")}
+              >
+                MOQ
+              </TableCell>
+              <TableCell
                 className={cn(
                   excelTf,
                   "text-right tabular-nums bg-sky-50",
@@ -1852,6 +2262,61 @@ export default function WarehouseOrderDetail({
           </span>
         </span>
       </p>
+
+      <AlertDialog open={moqConfirmOpen} onOpenChange={setMoqConfirmOpen}>
+        <AlertDialogContent className="max-w-lg">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Chấp nhận lệch MOQ?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  Có {moqViolations.length} dòng SL soạn không phải bội số MOQ
+                  (unit_2_ratio). Bạn có thể làm tròn theo đề xuất hoặc vẫn lưu
+                  số đang nhập.
+                </p>
+                <ul className="max-h-48 overflow-y-auto rounded border bg-orange-50/60 px-3 py-2 text-xs text-foreground space-y-1">
+                  {moqViolations.map((v) => (
+                    <li key={v.itemId} className="font-mono">
+                      <strong className="uppercase">{v.slug || "—"}</strong>
+                      {" · "}
+                      SL {v.qty} / MOQ {v.moq}
+                      <span className="text-orange-800 font-semibold">
+                        {" "}
+                        → đề xuất {v.suggest}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
+            <AlertDialogCancel disabled={savePacking.isPending}>
+              Hủy
+            </AlertDialogCancel>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={savePacking.isPending}
+              onClick={() => void applyMoqSuggestionsAndSave()}
+            >
+              {savePacking.isPending ? (
+                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+              ) : null}
+              Áp dụng đề xuất &amp; lưu
+            </Button>
+            <AlertDialogAction
+              disabled={savePacking.isPending}
+              onClick={(e) => {
+                e.preventDefault();
+                void persistPacking(true);
+              }}
+            >
+              Vẫn lưu lệch MOQ
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

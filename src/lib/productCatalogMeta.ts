@@ -16,6 +16,8 @@ interface ProductCatalogMetaSource {
   barcode?: string | null;
   unit_2?: string | null;
   barcode_2?: string | null;
+  /** 1 unit_2 = unit_2_ratio × unit — dùng làm MOQ khi đặt/soạn ĐVT cơ sở */
+  unit_2_ratio?: number | null;
   is_new?: boolean;
   is_out_stock?: boolean;
   is_locked?: boolean;
@@ -36,6 +38,8 @@ export interface ProductCatalogMeta {
   barcode: string | null;
   unit_2: string | null;
   barcode_2: string | null;
+  /** MOQ khi đặt theo ĐVT cơ sở (= unit_2_ratio) */
+  unit_2_ratio: number | null;
   is_new: boolean;
   is_out_stock: boolean;
   is_locked: boolean;
@@ -100,6 +104,7 @@ export function buildProductMetaIndexFromProducts(
 
   for (const p of rows) {
     if (!p.slug) continue;
+    const ratio = Number(p.unit_2_ratio);
     const row: ProductCatalogMeta = {
       slug: p.slug,
       name: p.name || "Sản phẩm",
@@ -107,6 +112,7 @@ export function buildProductMetaIndexFromProducts(
       barcode: p.barcode || null,
       unit_2: p.unit_2 || null,
       barcode_2: p.barcode_2 || null,
+      unit_2_ratio: Number.isFinite(ratio) && ratio > 0 ? ratio : null,
       is_new: !!p.is_new,
       is_out_stock: !!p.is_out_stock,
       is_locked: !!p.is_locked,
@@ -152,12 +158,12 @@ export async function fetchProductMetaBySlugs(
     const full = await supabase
       .from("products")
       .select(
-        "slug, name, unit, barcode, unit_2, barcode_2, is_new, is_out_stock, is_locked, price, stock_quantity",
+        "slug, name, unit, barcode, unit_2, barcode_2, unit_2_ratio, is_new, is_out_stock, is_locked, price, stock_quantity",
       )
       .in("slug", slugVariants);
     if (
       full.error &&
-      /unit_2|barcode_2|is_new|is_locked|stock_quantity/i.test(
+      /unit_2|barcode_2|unit_2_ratio|is_new|is_locked|stock_quantity/i.test(
         full.error.message || "",
       )
     ) {
@@ -189,6 +195,7 @@ export async function fetchProductMetaBySlugs(
       barcode?: string | null;
       unit_2?: string | null;
       barcode_2?: string | null;
+      unit_2_ratio?: number | null;
       is_new?: boolean;
       is_out_stock?: boolean;
       is_locked?: boolean;
@@ -196,6 +203,7 @@ export async function fetchProductMetaBySlugs(
       stock_quantity?: number | null;
     }[] | null) || []) {
       if (!p.slug) continue;
+      const ratio = Number(p.unit_2_ratio);
       const row: ProductCatalogMeta = {
         slug: p.slug,
         name: p.name,
@@ -203,6 +211,7 @@ export async function fetchProductMetaBySlugs(
         barcode: p.barcode || null,
         unit_2: p.unit_2 || null,
         barcode_2: p.barcode_2 || null,
+        unit_2_ratio: Number.isFinite(ratio) && ratio > 0 ? ratio : null,
         is_new: !!p.is_new,
         is_out_stock: !!p.is_out_stock,
         is_locked: !!p.is_locked,
@@ -225,12 +234,15 @@ export async function fetchProductMetaBySlugs(
     const { data } = await supabase
       .from("products")
       .select(
-        "slug, name, unit, barcode, unit_2, barcode_2, is_new, is_out_stock, is_locked, price, stock_quantity",
+        "slug, name, unit, barcode, unit_2, barcode_2, unit_2_ratio, is_new, is_out_stock, is_locked, price, stock_quantity",
       )
       .ilike("slug", slug)
       .limit(3);
     for (const p of (data as ProductCatalogMeta[] | null) || []) {
       if (!p?.slug) continue;
+      const ratio = Number(
+        (p as { unit_2_ratio?: number | null }).unit_2_ratio,
+      );
       const row: ProductCatalogMeta = {
         slug: p.slug,
         name: p.name,
@@ -238,6 +250,7 @@ export async function fetchProductMetaBySlugs(
         barcode: p.barcode || null,
         unit_2: (p as { unit_2?: string | null }).unit_2 || null,
         barcode_2: (p as { barcode_2?: string | null }).barcode_2 || null,
+        unit_2_ratio: Number.isFinite(ratio) && ratio > 0 ? ratio : null,
         is_new: !!p.is_new,
         is_out_stock: !!p.is_out_stock,
         is_locked: !!p.is_locked,
