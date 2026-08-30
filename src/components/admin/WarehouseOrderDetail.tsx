@@ -211,6 +211,11 @@ export default function WarehouseOrderDetail({
       suggest: number;
     }[]
   >([]);
+  /**
+   * Mở khóa nhập SL lẻ / dưới MOQ — dùng chung tab Quản Lý + Soạn Hàng
+   * (cùng UX form tạo đơn).
+   */
+  const [allowPartial, setAllowPartial] = useState(false);
   const [exportingTransfer, setExportingTransfer] = useState(false);
   const [unitBusyId, setUnitBusyId] = useState<string | null>(null);
   const [savingConfirm, setSavingConfirm] = useState(false);
@@ -597,11 +602,11 @@ export default function WarehouseOrderDetail({
     }
     const moq = moqOf(slug, unit);
     let qty = Math.max(1, Number(newQty) || 1);
-    if (qty === 1 && moq > 1) qty = moq;
-    if (!isQtyMultipleOfMoq(qty, moq)) {
+    if (!allowPartial && qty === 1 && moq > 1) qty = moq;
+    if (!allowPartial && !isQtyMultipleOfMoq(qty, moq)) {
       toast({
         title: "SL không đúng bội số MOQ",
-        description: `${slug}: SL ${qty} phải là bội số của ${moq}.`,
+        description: `${slug}: SL ${qty} phải là bội số của ${moq}. Tick «cho phép xuất lẻ» nếu cần nhập lệch MOQ.`,
         variant: "destructive",
       });
       focusQty();
@@ -723,9 +728,10 @@ export default function WarehouseOrderDetail({
       setNewPrice(Number(match.price) || 0);
     }
     const moq = moqOf(newSlug, dvt);
-    setNewQty((q) =>
-      moq > 1 && !isQtyMultipleOfMoq(q, moq) ? moq : Math.max(1, q),
-    );
+    setNewQty((q) => {
+      if (allowPartial) return Math.max(1, q);
+      return moq > 1 && !isQtyMultipleOfMoq(q, moq) ? moq : Math.max(1, q);
+    });
   };
 
   if (isLoading || !order) {
@@ -1106,6 +1112,10 @@ export default function WarehouseOrderDetail({
   const handleSavePack = async () => {
     const violations = collectPackMoqViolations();
     if (violations.length) {
+      if (allowPartial) {
+        await persistPacking(true);
+        return;
+      }
       setMoqViolations(violations);
       setMoqConfirmOpen(true);
       return;
@@ -1160,21 +1170,25 @@ export default function WarehouseOrderDetail({
 
   /** GAS ql_luuSua — xác nhận lưu sửa SL yêu cầu trên Quản Lý */
   const handleSaveConfirm = async () => {
-    const moqBad = order.order_items.find((it) => {
-      const qty = Number(reqDraft[it.id] ?? it.qty_requested ?? it.quantity) || 0;
-      return !isQtyMultipleOfMoq(qty, moqOf(it.product_slug, lineUnit(it)));
-    });
-    if (moqBad) {
-      const moq = moqOf(moqBad.product_slug, lineUnit(moqBad));
-      const qty =
-        Number(reqDraft[moqBad.id] ?? moqBad.qty_requested ?? moqBad.quantity) ||
-        0;
-      toast({
-        title: "SL không đúng bội số MOQ",
-        description: `${moqBad.product_slug || moqBad.product_name}: SL ${qty} phải là bội số của ${moq}.`,
-        variant: "destructive",
+    if (!allowPartial) {
+      const moqBad = order.order_items.find((it) => {
+        const qty =
+          Number(reqDraft[it.id] ?? it.qty_requested ?? it.quantity) || 0;
+        return !isQtyMultipleOfMoq(qty, moqOf(it.product_slug, lineUnit(it)));
       });
-      return;
+      if (moqBad) {
+        const moq = moqOf(moqBad.product_slug, lineUnit(moqBad));
+        const qty =
+          Number(
+            reqDraft[moqBad.id] ?? moqBad.qty_requested ?? moqBad.quantity,
+          ) || 0;
+        toast({
+          title: "SL không đúng bội số MOQ",
+          description: `${moqBad.product_slug || moqBad.product_name}: SL ${qty} phải là bội số của ${moq}. Tick «cho phép xuất lẻ» nếu cần nhập lệch MOQ.`,
+          variant: "destructive",
+        });
+        return;
+      }
     }
     const changes = order.order_items.filter((it) => {
       const cur = it.qty_requested ?? it.quantity;
@@ -1210,7 +1224,7 @@ export default function WarehouseOrderDetail({
       toast({
         title: "Đã lưu xác nhận",
         description: changes.length
-          ? `Cập nhật ${changes.length} dòng · ${tip.title}`
+          ? `Cập nhật ${changes.length} dòng · ${tip.title}${allowPartial ? " · đã mở khóa xuất lẻ" : ""}`
           : `Không có đổi SL · ${tip.title}`,
       });
     } catch (e) {
@@ -1518,11 +1532,34 @@ export default function WarehouseOrderDetail({
 
       {!locked && (
         <div className="border rounded-lg p-3 space-y-2 bg-card relative sticky top-0 z-50 shadow-sm overflow-visible">
-          <p className="text-xs text-muted-foreground">
-            Enter thêm mã → lưu ngay. Sửa <strong>SL yêu cầu</strong> rồi bấm{" "}
-            <strong>Lưu xác nhận</strong>. Soạn hàng (SL soạn) làm ở tab{" "}
-            <strong>Soạn Hàng</strong>.
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">
+              Enter thêm mã → lưu ngay. Sửa{" "}
+              <strong>
+                {variant === "packing" ? "SL soạn" : "SL yêu cầu"}
+              </strong>{" "}
+              rồi bấm{" "}
+              <strong>
+                {variant === "packing" ? "Lưu soạn hàng" : "Lưu xác nhận"}
+              </strong>
+              .
+            </p>
+            <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 px-2 py-1.5 rounded-md">
+              <input
+                type="checkbox"
+                id="detail-allow-partial"
+                className="w-4 h-4 cursor-pointer accent-amber-600"
+                checked={allowPartial}
+                onChange={(e) => setAllowPartial(e.target.checked)}
+              />
+              <Label
+                htmlFor="detail-allow-partial"
+                className="cursor-pointer font-semibold text-xs leading-snug"
+              >
+                Cho phép xuất lẻ (mở khóa nhập dưới / lệch MOQ)
+              </Label>
+            </div>
+          </div>
           <div className="flex flex-wrap gap-2 items-end">
             <div className="flex-1 min-w-[200px] space-y-1 relative">
               <Label className="text-xs">
@@ -1661,7 +1698,8 @@ export default function WarehouseOrderDetail({
                 ref={qtyRef}
                 className={cn(
                   "w-24 h-10 text-base font-bold border-2",
-                  newSlug &&
+                  !allowPartial &&
+                    newSlug &&
                     moqOf(newSlug, newUnit) > 1 &&
                     !isQtyMultipleOfMoq(newQty, moqOf(newSlug, newUnit))
                     ? "border-orange-500 text-orange-800"
@@ -1671,7 +1709,13 @@ export default function WarehouseOrderDetail({
                 value={newQty}
                 onValueChange={(v) => setNewQty(Math.max(1, v))}
                 min={1}
-                step={newSlug ? moqOf(newSlug, newUnit) : 1}
+                step={
+                  allowPartial
+                    ? 1
+                    : newSlug
+                      ? moqOf(newSlug, newUnit)
+                      : 1
+                }
                 onKeyDown={(e) => {
                   if (e.key !== "Enter") return;
                   e.preventDefault();
@@ -2044,7 +2088,9 @@ export default function WarehouseOrderDetail({
                       <QtyInput
                         className={cn(
                           "w-16 ml-auto",
-                          moqError && "border-orange-500 text-orange-800",
+                          !allowPartial &&
+                            moqError &&
+                            "border-orange-500 text-orange-800",
                         )}
                         value={reqDraft[it.id] ?? req}
                         onValueChange={(v) =>
@@ -2053,9 +2099,9 @@ export default function WarehouseOrderDetail({
                             [it.id]: Math.max(0, v),
                           }))
                         }
-                        step={moq}
+                        step={allowPartial ? 1 : moq}
                         title={
-                          moqError
+                          !allowPartial && moqError
                             ? `SL phải là bội số của MOQ ${moq}`
                             : undefined
                         }
