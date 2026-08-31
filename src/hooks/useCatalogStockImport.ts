@@ -14,6 +14,27 @@ import {
 
 const PAGE = 1000;
 
+const EXTRA_PRODUCT_COLUMNS = [
+  "price_2",
+  "unit_2_ratio",
+  "unit_2",
+  "barcode_2",
+  "parent_sku",
+  "is_new",
+] as const;
+
+function isSchemaColumnError(message?: string | null) {
+  return /schema cache|Could not find the|column .* does not exist|PGRST204/i.test(
+    message || "",
+  );
+}
+
+function omitProductExtras(row: Record<string, unknown>) {
+  const next = { ...row };
+  for (const key of EXTRA_PRODUCT_COLUMNS) delete next[key];
+  return next;
+}
+
 export type CatalogProductRowLite = {
   id: string;
   name: string;
@@ -352,10 +373,22 @@ async function ensureProducts(
         }
 
         if (!Object.keys(patch).length) return;
-        return supabase
+        let { error } = await supabase
           .from("products")
           .update(patch as never)
           .eq("id", u.id);
+        if (error && isSchemaColumnError(error.message)) {
+          const stripped = omitProductExtras(patch);
+          if (!Object.keys(stripped).length) return;
+          const retry = await supabase
+            .from("products")
+            .update(stripped as never)
+            .eq("id", u.id);
+          error = retry.error;
+        }
+        if (error) {
+          throw new Error(`Không cập nhật SP: ${error.message}`);
+        }
       }),
     );
     updated += slice.length;
@@ -384,10 +417,20 @@ async function ensureProducts(
         : "Import danh mục từ Excel (GAS catalogFast)",
     }));
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("products")
       .insert(payload as never)
       .select("id, slug");
+
+    if (error && isSchemaColumnError(error.message)) {
+      const stripped = payload.map((row) => omitProductExtras(row as Record<string, unknown>));
+      const retry = await supabase
+        .from("products")
+        .insert(stripped as never)
+        .select("id, slug");
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) {
       for (const c of slice) {
@@ -401,7 +444,6 @@ async function ensureProducts(
             is_active: true,
             unit: c.unit,
             barcode: c.barcode,
-            is_new: c.isNew,
             stock_quantity: 0,
           } as never)
           .select("id, slug")
