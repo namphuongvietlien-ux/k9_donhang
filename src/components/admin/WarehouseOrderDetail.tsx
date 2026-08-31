@@ -86,6 +86,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -216,6 +217,13 @@ export default function WarehouseOrderDetail({
    * (cùng UX form tạo đơn).
    */
   const [allowPartial, setAllowPartial] = useState(false);
+  /**
+   * Admin: ghi đè tick In phiếu theo từng dòng.
+   * Không có key → theo mặc định (đủ xuất). true = hiện lại để in, false = ẩn khi in.
+   */
+  const [printIncludeOverride, setPrintIncludeOverride] = useState<
+    Record<string, boolean>
+  >({});
   const [exportingTransfer, setExportingTransfer] = useState(false);
   const [unitBusyId, setUnitBusyId] = useState<string | null>(null);
   const [savingConfirm, setSavingConfirm] = useState(false);
@@ -303,6 +311,10 @@ export default function WarehouseOrderDetail({
     () => getSkuUnitOptions(skuUnitIndex, newSlug),
     [skuUnitIndex, newSlug],
   );
+
+  useEffect(() => {
+    setPrintIncludeOverride({});
+  }, [orderId]);
 
   useEffect(() => {
     if (!order) return;
@@ -797,15 +809,26 @@ export default function WarehouseOrderDetail({
   /** Backward-compatible alias: soạn hàng dùng pack-over-stock; quản lý dùng req-over-stock. */
   const isItemStockShort = (it: typeof order.order_items[number]) =>
     variant === "packing" ? isPackOverStock(it) : isReqOverStock(it);
-  /** Xuất phiếu: SL soạn > 0 và không vượt tồn. */
-  const exportableOrderItems = order.order_items.filter((it) => {
-    if (it.is_out_stock || it.is_locked) return false;
+  /** Mặc định ẩn khỏi in: hết hàng / khóa / SL≤0 / SL soạn > tồn. */
+  const isAutoHiddenFromPrint = (it: typeof order.order_items[number]) => {
+    if (it.is_out_stock || it.is_locked) return true;
     const qty = packedQtyOf(it);
-    if (qty <= 0) return false;
+    if (qty <= 0) return true;
     const availableQty = availableOf(it);
-    if (availableQty != null && qty > availableQty) return false;
-    return true;
-  });
+    if (availableQty != null && qty > availableQty) return true;
+    return false;
+  };
+  /** Admin tick In: ghi đè ẩn/mở; không phải admin → chỉ mã đủ xuất. */
+  const isPrintIncluded = (it: typeof order.order_items[number]) => {
+    if (Object.prototype.hasOwnProperty.call(printIncludeOverride, it.id)) {
+      return !!printIncludeOverride[it.id];
+    }
+    return !isAutoHiddenFromPrint(it);
+  };
+  const setPrintIncluded = (itemId: string, included: boolean) => {
+    setPrintIncludeOverride((prev) => ({ ...prev, [itemId]: included }));
+  };
+  const resetPrintIncludeToDefault = () => setPrintIncludeOverride({});
   const displayOrderItems = variant === "packing"
     ? [...order.order_items].sort((left, right) => {
         // Không xuất (SL soạn > tồn) xuống cuối; đã hạ SL theo tồn lên trên
@@ -903,9 +926,29 @@ export default function WarehouseOrderDetail({
     return it.qty_packed != null ? Number(it.qty_packed) || 0 : reqShown;
   };
 
+  const selectAllWithQtyForPrint = () => {
+    const next: Record<string, boolean> = {};
+    order.order_items.forEach((it) => {
+      next[it.id] = printQtyOf(it) > 0;
+    });
+    setPrintIncludeOverride(next);
+  };
+  const printableOrderItems = order.order_items.filter(
+    (it) => isPrintIncluded(it) && printQtyOf(it) > 0,
+  );
+  const hiddenFromPrintCount = order.order_items.filter(
+    (it) => !isPrintIncluded(it) && printQtyOf(it) > 0,
+  ).length;
+  const forcedVisibleCount = order.order_items.filter(
+    (it) =>
+      isAutoHiddenFromPrint(it) &&
+      isPrintIncluded(it) &&
+      printQtyOf(it) > 0,
+  ).length;
+
   const createPrintDetail = () => warehouseOrderToPrintDetail({
     ...order,
-    order_items: exportableOrderItems.map((it) => ({
+    order_items: printableOrderItems.map((it) => ({
       ...it,
       qty_packed: printQtyOf(it),
       display_unit: printUnitOf(it),
@@ -945,8 +988,9 @@ export default function WarehouseOrderDetail({
     if (!lines.length) {
       toast({
         title: "Không có dòng hàng để xuất",
-        description:
-          "Phiếu chưa có dòng đủ điều kiện (SL > 0, còn tồn, không khóa).",
+        description: isAdmin
+          ? "Tick cột In trên các mã cần xuất (admin có thể hiện lại mã đang ẩn)."
+          : "Phiếu chưa có dòng đủ điều kiện (SL > 0, còn tồn, không khóa).",
         variant: "destructive",
       });
       return;
@@ -1362,17 +1406,40 @@ export default function WarehouseOrderDetail({
             variant="secondary"
             size="sm"
             onClick={() => {
+              if (!printableOrderItems.length) {
+                toast({
+                  title: "Không có mã để in",
+                  description: isAdmin
+                    ? "Tick cột In để chọn mã (kể cả mã đang ẩn)."
+                    : "Chưa có mã đủ điều kiện xuất.",
+                  variant: "destructive",
+                });
+                return;
+              }
               openOrderPdfWindow(createPrintDetail());
             }}
             disabled={stockLoading}
           >
             <Printer className="w-4 h-4 mr-1" />
             Xem / In PDF
+            {printableOrderItems.length
+              ? ` (${printableOrderItems.length})`
+              : ""}
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={() => {
+              if (!printableOrderItems.length) {
+                toast({
+                  title: "Không có mã để in",
+                  description: isAdmin
+                    ? "Tick cột In để chọn mã (kể cả mã đang ẩn)."
+                    : "Chưa có mã đủ điều kiện xuất.",
+                  variant: "destructive",
+                });
+                return;
+              }
               printOrderViaIframe(createPrintDetail());
             }}
             disabled={stockLoading}
@@ -1383,6 +1450,16 @@ export default function WarehouseOrderDetail({
             variant="outline"
             size="sm"
             onClick={() => {
+              if (!printableOrderItems.length) {
+                toast({
+                  title: "Không có mã để xuất Excel",
+                  description: isAdmin
+                    ? "Tick cột In để chọn mã (kể cả mã đang ẩn)."
+                    : "Chưa có mã đủ điều kiện xuất.",
+                  variant: "destructive",
+                });
+                return;
+              }
               exportOrderExcel(createPrintDetail());
               toast({ title: "Đã tải file Excel" });
             }}
@@ -1788,11 +1865,59 @@ export default function WarehouseOrderDetail({
               </>
             ) : null}{" "}
             Bấm <strong>Tải lại tồn</strong> nếu vừa chỉnh tồn kho.
+            {isAdmin ? (
+              <>
+                {" "}
+                Admin: dùng cột <strong>In</strong> để tick hiện lại mã đang ẩn
+                lên phiếu in / Excel.
+              </>
+            ) : null}
+          </div>
+        ) : null}
+        {isAdmin ? (
+          <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-900">
+            <span>
+              In phiếu: <strong>{printableOrderItems.length}</strong> mã
+              {hiddenFromPrintCount > 0
+                ? ` · đang ẩn ${hiddenFromPrintCount}`
+                : ""}
+              {forcedVisibleCount > 0
+                ? ` · đã mở lại ${forcedVisibleCount}`
+                : ""}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={resetPrintIncludeToDefault}
+              title="Chỉ tick các mã đủ xuất (mặc định)"
+            >
+              Chỉ mã đủ xuất
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={selectAllWithQtyForPrint}
+              title="Tick mọi mã có SL &gt; 0 (kể cả đang ẩn)"
+            >
+              Tick tất cả có SL
+            </Button>
           </div>
         ) : null}
         <Table stickyHeader>
           <TableHeader>
             <TableRow>
+              {isAdmin ? (
+                <TableHead
+                  className={cn(excelTh, "w-12 text-center")}
+                  title="Tick = hiện trên phiếu in / Excel. Bỏ tick = ẩn."
+                >
+                  In
+                </TableHead>
+              ) : null}
               <TableHead className={cn(excelTh, "w-10 text-center")}>
                 STT
               </TableHead>
@@ -1885,8 +2010,40 @@ export default function WarehouseOrderDetail({
                     it.is_locked && "opacity-75",
                     stockShort && "bg-red-50/80 opacity-60",
                     packFitsStock && !moqError && "bg-emerald-50/90",
+                    isAdmin &&
+                      isAutoHiddenFromPrint(it) &&
+                      isPrintIncluded(it) &&
+                      "ring-1 ring-inset ring-sky-300",
                   )}
                 >
+                  {isAdmin ? (
+                    <TableCell className={cn(excelTd, "text-center")}>
+                      <div className="flex flex-col items-center gap-0.5">
+                        <Checkbox
+                          checked={isPrintIncluded(it)}
+                          disabled={printQtyOf(it) <= 0}
+                          onCheckedChange={(checked) =>
+                            setPrintIncluded(it.id, checked === true)
+                          }
+                          aria-label={
+                            isPrintIncluded(it)
+                              ? "Bỏ tick để ẩn khi in"
+                              : "Tick để hiện lại khi in"
+                          }
+                          title={
+                            isPrintIncluded(it)
+                              ? "Đang in — bỏ tick để ẩn"
+                              : "Đang ẩn — tick để hiện lại trên phiếu in"
+                          }
+                        />
+                        {isAutoHiddenFromPrint(it) ? (
+                          <span className="text-[9px] font-bold text-sky-700 leading-none">
+                            {isPrintIncluded(it) ? "mở" : "ẩn"}
+                          </span>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                  ) : null}
                   <TableCell
                     className={cn(
                       excelTd,
@@ -2225,7 +2382,10 @@ export default function WarehouseOrderDetail({
           </TableBody>
           <TableFooter className="bg-transparent">
             <TableRow className="hover:bg-transparent">
-              <TableCell colSpan={5} className={cn(excelTf, "text-left")}>
+              <TableCell
+                colSpan={isAdmin ? 6 : 5}
+                className={cn(excelTf, "text-left")}
+              >
                 <span className="font-semibold">
                   TỔNG CỘNG: {footerTotals.lines} dòng hàng
                 </span>
