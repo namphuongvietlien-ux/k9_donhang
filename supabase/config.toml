@@ -63,3 +63,8 @@ entrypoint = "./functions/telegram-webhook/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/telegram-weekly-reminder/index.ts"
+
+[functions.telegram-vaccine-pickup]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/telegram-vaccine-pickup/index.ts"
