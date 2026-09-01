@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
-import { Bell, Check, Eye, FileDown, Loader2, Plus, Printer, Send, Trash2, X } from "lucide-react";
+import { Bell, Check, ClipboardCheck, Eye, FileDown, FilePlus, History, Loader2, Plus, Printer, Send, Trash2, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useProducts } from "@/hooks/useProducts";
+import { useWarehouses, warehouseLabel } from "@/hooks/useWarehouses";
 import {
   escapeTelegramHtml,
   notifyInternalDispatchTelegram,
@@ -32,13 +33,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import {
   Accordion,
   AccordionContent,
   AccordionItem,
@@ -46,6 +40,15 @@ import {
 } from "@/components/ui/accordion";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+
+type WorkspaceView = "request" | "review" | "history";
+
+const WORKSPACE_VIEWS: { id: WorkspaceView; label: string; icon: typeof FilePlus }[] = [
+  { id: "request", label: "Đề nghị xuất", icon: FilePlus },
+  { id: "review", label: "Kiểm tra đơn hàng", icon: ClipboardCheck },
+  { id: "history", label: "Lịch sử", icon: History },
+];
 
 type DispatchItem = { id?: string; line_no: number; product_id: string | null; product_code: string; product_name: string; unit: string | null; quantity: number; notes: string | null };
 type WarehouseRef = { code: string; name: string; short_name?: string | null } | null;
@@ -309,7 +312,8 @@ function exportHistory(
 }
 
 export default function InternalDispatchWorkspace() {
-  const { warehouseId, warehouseLabel, role, user } = useAuth();
+  const { warehouseId, warehouseLabel: scopedWarehouseLabel, role, user } = useAuth();
+  const { warehouses } = useWarehouses();
   const { products } = useProducts();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -318,13 +322,17 @@ export default function InternalDispatchWorkspace() {
   const [productSearch, setProductSearch] = useState("");
   const [notes, setNotes] = useState("");
   const [branchFilter, setBranchFilter] = useState("all");
+  const [pickedWarehouseId, setPickedWarehouseId] = useState("");
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("request");
   const [isLinkingTelegram, setIsLinkingTelegram] = useState(false);
   /** Phiếu đang mở ở "mắt xem đơn" — giữ id để dữ liệu luôn theo query mới nhất */
   const [viewDispatchId, setViewDispatchId] = useState<string | null>(null);
-  /** Form tạo đơn — mở bằng FAB (Sheet slide-over) */
-  const [createOpen, setCreateOpen] = useState(false);
   const canManage = role === "manager" || role === "super_admin";
   const canComplete = role === "super_admin";
+  const destWarehouseId = warehouseId || pickedWarehouseId;
+  const destWarehouseLabel = warehouseId
+    ? scopedWarehouseLabel
+    : warehouseLabel(warehouses.find((w) => w.id === pickedWarehouseId) || { code: "", name: "", short_name: null, print_name: null });
 
   const { data: dispatches = [], isLoading } = useQuery({
     queryKey: ["internal-dispatches"],
@@ -394,8 +402,8 @@ export default function InternalDispatchWorkspace() {
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      if (!warehouseId) throw new Error("Tài khoản chưa được gán chi nhánh.");
-      const { data, error } = await supabase.rpc("create_internal_dispatch" as never, { _warehouse_id: warehouseId, _notes: notes || null, _items: lines } as never);
+      if (!destWarehouseId) throw new Error("Chọn chi nhánh nhận hàng.");
+      const { data, error } = await supabase.rpc("create_internal_dispatch" as never, { _warehouse_id: destWarehouseId, _notes: notes || null, _items: lines } as never);
       if (error) throw error;
       return data as string;
     },
@@ -403,12 +411,12 @@ export default function InternalDispatchWorkspace() {
       const lineCount = lines.length;
       setLines([]);
       setNotes("");
-      setCreateOpen(false);
+      setWorkspaceView("review");
       await refresh();
-      toast({ title: "Đã gửi đơn xuất nội bộ" });
+      toast({ title: "Đã gửi đề nghị xuất" });
       warnIfTelegramFailed(await notifyInternalDispatchTelegram(
-        `📦 <b>Đơn xuất nội bộ mới</b>\nChi nhánh: ${escapeTelegramHtml(warehouseLabel || "—")}\nSố dòng: ${lineCount}\nTrạng thái: chờ quản lý duyệt`,
-        { warehouseId: warehouseId || undefined, internalDispatchId: dispatchId },
+        `📦 <b>Đơn xuất nội bộ mới</b>\nChi nhánh: ${escapeTelegramHtml(destWarehouseLabel || "—")}\nSố dòng: ${lineCount}\nTrạng thái: chờ quản lý duyệt`,
+        { warehouseId: destWarehouseId || undefined, internalDispatchId: dispatchId },
       ));
     }, onError: (error: Error) => toast({ title: "Không gửi được đơn", description: error.message, variant: "destructive" }),
   });
@@ -554,8 +562,18 @@ export default function InternalDispatchWorkspace() {
   );
 
   /** Gom nhóm AppSheet: Trạng thái → Ngày local → danh sách phiếu. */
-  const groupedDispatches = useMemo(
-    () => groupDispatchesByStatusThenDate(visibleDispatches),
+  const groupedPending = useMemo(
+    () =>
+      groupDispatchesByStatusThenDate(
+        visibleDispatches.filter((dispatch) => dispatch.status === "pending_manager"),
+      ),
+    [visibleDispatches],
+  );
+  const groupedHistory = useMemo(
+    () =>
+      groupDispatchesByStatusThenDate(
+        visibleDispatches.filter((dispatch) => dispatch.status !== "pending_manager"),
+      ),
     [visibleDispatches],
   );
 
@@ -678,332 +696,474 @@ export default function InternalDispatchWorkspace() {
     }
   };
 
+  const renderDispatchGroups = (groups: DispatchStatusGroup[], emptyText: string) => {
+    if (isLoading) {
+      return (
+        <div className="py-8 text-center">
+          <Loader2 className="inline h-4 w-4 animate-spin" />
+        </div>
+      );
+    }
+    if (!groups.length) {
+      return <p className="py-8 text-center text-sm text-muted-foreground">{emptyText}</p>;
+    }
+    return (
+      <Accordion type="multiple" defaultValue={groups.map((group) => group.status)} className="w-full">
+        {groups.map((statusGroup) => (
+          <AccordionItem key={statusGroup.status} value={statusGroup.status}>
+            <AccordionTrigger className="px-2 py-2 text-sm hover:no-underline">
+              <span className="flex items-center gap-2 text-left">
+                <span className="font-semibold">{statusLabel[statusGroup.status] || statusGroup.status}</span>
+                <Badge variant="secondary" className="font-normal tabular-nums">{statusGroup.count}</Badge>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent className="px-1 pb-3">
+              {statusGroup.dates.map((dateGroup) => (
+                <div key={`${statusGroup.status}-${dateGroup.dateKey}`} className="mb-3">
+                  <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">
+                    {dateGroup.dateKey === todayDateKey ? `Hôm nay (${dateGroup.dateKey})` : dateGroup.dateKey}
+                  </p>
+                  <div className="overflow-x-auto rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="pl-3">Mã đơn</TableHead>
+                          <TableHead>Chi nhánh</TableHead>
+                          <TableHead>Ngày</TableHead>
+                          <TableHead>Trạng thái</TableHead>
+                          <TableHead>Dòng</TableHead>
+                          <TableHead className="pr-3 text-right">Thao tác</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {dateGroup.items.map((dispatch) => {
+                          const isSyncing = syncingDispatchId === dispatch.id;
+                          const showDecide =
+                            canManage && dispatch.status === "pending_manager" && !isSyncing;
+                          return (
+                            <TableRow key={dispatch.id}>
+                              <TableCell className="pl-3 font-mono text-xs">{dispatch.dispatch_code}</TableCell>
+                              <TableCell>{warehouseShortLabel(dispatch.warehouses)}</TableCell>
+                              <TableCell>
+                                {new Date(dispatch.requested_at).toLocaleDateString("vi-VN")}
+                              </TableCell>
+                              <TableCell>{statusBadge(dispatch)}</TableCell>
+                              <TableCell>{dispatch.internal_dispatch_items.length}</TableCell>
+                              <TableCell className="pr-3 text-right">
+                                <div className="inline-flex items-center gap-1">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 px-2"
+                                    aria-label={`Xem phiếu ${dispatch.dispatch_code}`}
+                                    onClick={() => setViewDispatchId(dispatch.id)}
+                                  >
+                                    <Eye className="h-3.5 w-3.5" />
+                                  </Button>
+                                  {showDecide && (
+                                    <>
+                                      <Button
+                                        size="sm"
+                                        className="h-7 px-2"
+                                        onClick={() => approveMutation.mutate(dispatch)}
+                                        disabled={decisionPending}
+                                      >
+                                        <Check className="mr-1 h-3.5 w-3.5" />
+                                        Duyệt
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="destructive"
+                                        className="h-7 px-2"
+                                        onClick={() => {
+                                          if (confirm(`Không duyệt đơn ${dispatch.dispatch_code}?`)) {
+                                            rejectMutation.mutate(dispatch);
+                                          }
+                                        }}
+                                        disabled={decisionPending}
+                                      >
+                                        <X className="h-3.5 w-3.5" />
+                                      </Button>
+                                    </>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              ))}
+            </AccordionContent>
+          </AccordionItem>
+        ))}
+      </Accordion>
+    );
+  };
+
   return (
     <div className="relative space-y-4 print:space-y-3">
-      {/* Toolbar ngang — không có nút Thêm mới (dùng FAB) */}
-      <div className="flex flex-wrap items-start justify-between gap-3 print:hidden">
+      {/* Nút nhỏ: Đề nghị xuất / Kiểm tra / Lịch sử */}
+      <div className="flex flex-wrap items-center justify-between gap-2 print:hidden">
         <div>
-          <h1 className="text-2xl font-bold">Xuất nội bộ và Đơn tuần</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Đơn chi nhánh được duyệt tự động gom vào đơn tuần của Tổng công ty.
+          <h1 className="text-lg font-bold sm:text-xl">Xuất nội bộ</h1>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Mọi tài khoản nhập đề nghị xuất. Quản lý duyệt ở Kiểm tra đơn hàng.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Select value={activeBranch?.code || "all"} onValueChange={setBranchFilter}>
-            <SelectTrigger className="w-[210px]" aria-label="Lọc theo chi nhánh nhận">
-              <SelectValue placeholder="Chi nhánh nhận" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Tất cả chi nhánh ({branchOptions.length})</SelectItem>
-              {branchOptions.map((branch) => (
-                <SelectItem key={branch.code} value={branch.code}>
-                  {branch.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button variant="outline" onClick={linkTelegram} disabled={!user || isLinkingTelegram}>
-            {isLinkingTelegram ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Bell className="mr-2 h-4 w-4" />
-            )}
-            Kết nối Telegram
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            onClick={linkTelegram}
+            disabled={!user || isLinkingTelegram}
+          >
+            {isLinkingTelegram ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Bell className="mr-1 h-3.5 w-3.5" />}
+            Telegram
           </Button>
-          {canManage && (
-            <Button
-              variant="outline"
-              onClick={() => exportHistory(dispatches, weeklyOrders, activeBranch)}
-            >
-              <FileDown className="mr-2 h-4 w-4" />
-              {activeBranch ? `Xuất Excel ${activeBranch.label}` : "Xuất Excel lịch sử"}
-            </Button>
-          )}
         </div>
       </div>
 
-      {activeBranch && (
-        <p className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm print:hidden">
-          Đang lọc theo chi nhánh nhận <strong>{activeBranch.label}</strong> — bảng, phiếu in và
-          file Excel chỉ chứa số liệu của chi nhánh này.
-        </p>
+      <div className="flex flex-wrap gap-1.5 print:hidden">
+        {WORKSPACE_VIEWS.map((item) => {
+          const Icon = item.icon;
+          const active = workspaceView === item.id;
+          const pendingCount =
+            item.id === "review"
+              ? groupedPending.reduce((sum, group) => sum + group.count, 0)
+              : 0;
+          return (
+            <Button
+              key={item.id}
+              type="button"
+              size="sm"
+              variant={active ? "default" : "outline"}
+              className={cn("h-7 rounded-full px-2.5 text-xs", !active && "text-muted-foreground")}
+              onClick={() => setWorkspaceView(item.id)}
+            >
+              <Icon className="mr-1 h-3.5 w-3.5" />
+              {item.label}
+              {pendingCount > 0 ? (
+                <Badge variant={active ? "secondary" : "default"} className="ml-1 h-4 px-1 text-[10px] font-normal">
+                  {pendingCount}
+                </Badge>
+              ) : null}
+            </Button>
+          );
+        })}
+      </div>
+
+      {workspaceView === "request" && (
+        <Card className="mx-auto max-w-2xl print:hidden shadow-sm">
+          <CardHeader className="space-y-1 py-3 px-4">
+            <CardTitle className="text-base">Đơn đề nghị xuất</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Thêm mặt hàng rồi gửi quản lý duyệt.
+              {warehouseId
+                ? " Chi nhánh nhận theo tài khoản đăng nhập."
+                : " Chọn chi nhánh nhận bên dưới."}
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3 px-4 pb-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label className="text-xs">Chi nhánh nhận</Label>
+                {warehouseId ? (
+                  <div className="mt-1 rounded-md border bg-muted/40 px-3 py-2 text-sm font-medium">
+                    {scopedWarehouseLabel || "—"}
+                  </div>
+                ) : (
+                  <Select value={pickedWarehouseId || undefined} onValueChange={setPickedWarehouseId}>
+                    <SelectTrigger className="mt-1 h-9" aria-label="Chọn chi nhánh nhận">
+                      <SelectValue placeholder="Chọn chi nhánh" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {warehouses.map((wh) => (
+                        <SelectItem key={wh.id} value={wh.id}>
+                          {warehouseLabel(wh)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+              <div>
+                <Label className="text-xs">Sau khi gửi</Label>
+                <div className="mt-1 rounded-md border bg-muted/40 px-3 py-2 text-sm">Chờ quản lý duyệt</div>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              <ProductSearchInput
+                className="relative flex-1"
+                label="Tìm sản phẩm"
+                value={productSearch}
+                onChange={(value) => {
+                  setProductSearch(value);
+                  setSelectedProduct("");
+                }}
+                suggestions={productSuggestions}
+                open={!!productSearch.trim()}
+                onOpenChange={() => {}}
+                showWhenTyping
+                onPick={(product) => pickProduct(product.id)}
+                placeholder="Gõ mã hàng, mã vạch hoặc tên..."
+              />
+              <Button type="button" variant="outline" size="sm" onClick={addProduct} disabled={!selectedProduct}>
+                <Plus className="mr-1 h-4 w-4" />
+                Thêm
+              </Button>
+            </div>
+
+            <div className="max-h-[36vh] overflow-auto rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>STT</TableHead>
+                    <TableHead>Mã hàng</TableHead>
+                    <TableHead>Tên hàng</TableHead>
+                    <TableHead>SL</TableHead>
+                    <TableHead>ĐVT</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {lines.length ? (
+                    lines.map((line, index) => (
+                      <TableRow key={`${line.product_id}-${index}`}>
+                        <TableCell>{index + 1}</TableCell>
+                        <TableCell className="font-mono text-xs">{line.product_code}</TableCell>
+                        <TableCell>{line.product_name}</TableCell>
+                        <TableCell>
+                          <Input
+                            className="h-8 w-20"
+                            type="number"
+                            min="0.001"
+                            step="0.001"
+                            value={line.quantity}
+                            onChange={(event) =>
+                              setLines((current) =>
+                                current.map((item, itemIndex) =>
+                                  itemIndex === index
+                                    ? { ...item, quantity: Number(event.target.value) }
+                                    : item,
+                                ),
+                              )
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>{line.unit || "—"}</TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            aria-label="Xóa dòng"
+                            onClick={() =>
+                              setLines((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                            }
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={6} className="py-6 text-center text-sm text-muted-foreground">
+                        Chưa có mặt hàng — tìm mã rồi bấm Thêm.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+
+            <div>
+              <Label htmlFor="dispatch-notes" className="text-xs">Ghi chú</Label>
+              <Textarea
+                id="dispatch-notes"
+                className="mt-1 min-h-[64px]"
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)}
+              />
+            </div>
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                onClick={() => createMutation.mutate()}
+                disabled={!lines.length || !destWarehouseId || createMutation.isPending}
+              >
+                {createMutation.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="mr-2 h-4 w-4" />
+                )}
+                Gửi đề nghị xuất
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
-      {/* Master: danh sách phiếu gom nhóm Accordion (status → ngày) */}
-      <Card className="print:hidden shadow-sm">
-        <CardHeader className="py-3 px-4">
-          <CardTitle className="text-base">
-            Đơn xuất nội bộ — {branchScopeLabel}{" "}
-            <span className="text-sm font-normal text-muted-foreground">
-              ({visibleDispatches.length} phiếu)
-            </span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="h-[calc(100vh-120px)] overflow-y-auto border-t px-2">
-            {isLoading ? (
-              <div className="py-10 text-center">
-                <Loader2 className="inline h-4 w-4 animate-spin" />
-              </div>
-            ) : !visibleDispatches.length ? (
-              <p className="py-10 text-center text-sm text-muted-foreground">
-                {activeBranch
-                  ? `Chi nhánh ${activeBranch.label} chưa có đơn xuất nội bộ.`
-                  : "Chưa có đơn xuất nội bộ."}
-              </p>
-            ) : (
-              <Accordion
-                type="multiple"
-                defaultValue={["pending_manager"]}
-                className="w-full"
-              >
-                {groupedDispatches.map((statusGroup) => (
-                  <AccordionItem key={statusGroup.status} value={statusGroup.status}>
-                    <AccordionTrigger className="px-2 text-sm hover:no-underline">
-                      <span className="flex items-center gap-2 text-left">
-                        <span className="font-semibold">
-                          {statusLabel[statusGroup.status] || statusGroup.status}
-                        </span>
-                        <Badge variant="secondary" className="font-normal tabular-nums">
-                          {statusGroup.count}
-                        </Badge>
-                      </span>
-                    </AccordionTrigger>
-                    <AccordionContent className="px-1 pb-3">
-                      <Accordion
-                        type="multiple"
-                        defaultValue={
-                          statusGroup.status === "pending_manager" ? [todayDateKey] : []
-                        }
-                        className="w-full border-l border-muted pl-2"
-                      >
-                        {statusGroup.dates.map((dateGroup) => (
-                          <AccordionItem
-                            key={`${statusGroup.status}-${dateGroup.dateKey}`}
-                            value={dateGroup.dateKey}
-                          >
-                            <AccordionTrigger className="px-2 py-2 text-sm hover:no-underline">
-                              <span className="flex items-center gap-2 text-left font-medium text-muted-foreground">
-                                <span>
-                                  {dateGroup.dateKey === todayDateKey
-                                    ? `Hôm nay (${dateGroup.dateKey})`
-                                    : dateGroup.dateKey}
-                                </span>
-                                <Badge variant="outline" className="font-normal tabular-nums">
-                                  {dateGroup.items.length}
-                                </Badge>
-                              </span>
-                            </AccordionTrigger>
-                            <AccordionContent className="pb-2">
-                              <div className="overflow-x-auto rounded-md border">
-                                <Table>
-                                  <TableHeader>
-                                    <TableRow>
-                                      <TableHead className="pl-4">Mã đơn</TableHead>
-                                      <TableHead>Chi nhánh</TableHead>
-                                      <TableHead>Ngày gửi</TableHead>
-                                      <TableHead>Trạng thái</TableHead>
-                                      <TableHead>Dòng hàng</TableHead>
-                                      <TableHead className="pr-4 text-right">Thao tác</TableHead>
-                                    </TableRow>
-                                  </TableHeader>
-                                  <TableBody>
-                                    {dateGroup.items.map((dispatch) => {
-                                      const isSyncing = syncingDispatchId === dispatch.id;
-                                      const showDecide =
-                                        canManage &&
-                                        dispatch.status === "pending_manager" &&
-                                        !isSyncing;
-                                      return (
-                                        <TableRow key={dispatch.id}>
-                                          <TableCell className="pl-4 font-mono text-xs">
-                                            {dispatch.dispatch_code}
-                                          </TableCell>
-                                          <TableCell>
-                                            {warehouseShortLabel(dispatch.warehouses)}
-                                          </TableCell>
-                                          <TableCell>
-                                            {new Date(dispatch.requested_at).toLocaleDateString(
-                                              "vi-VN",
-                                            )}
-                                          </TableCell>
-                                          <TableCell>{statusBadge(dispatch)}</TableCell>
-                                          <TableCell>
-                                            {dispatch.internal_dispatch_items.length}
-                                          </TableCell>
-                                          <TableCell className="pr-4 text-right">
-                                            <div className="inline-flex items-center gap-2">
-                                              <Button
-                                                size="sm"
-                                                variant="outline"
-                                                aria-label={`Xem phiếu ${dispatch.dispatch_code}`}
-                                                title="Xem đơn và duyệt ngay trên phiếu"
-                                                onClick={() => setViewDispatchId(dispatch.id)}
-                                              >
-                                                <Eye className="h-4 w-4" />
-                                              </Button>
-                                              {showDecide && (
-                                                <>
-                                                  <Button
-                                                    size="sm"
-                                                    onClick={() =>
-                                                      approveMutation.mutate(dispatch)
-                                                    }
-                                                    disabled={decisionPending}
-                                                  >
-                                                    <Check className="mr-1 h-4 w-4" />
-                                                    Duyệt
-                                                  </Button>
-                                                  <Button
-                                                    size="sm"
-                                                    variant="destructive"
-                                                    onClick={() => {
-                                                      if (
-                                                        confirm(
-                                                          `Không duyệt đơn ${dispatch.dispatch_code}?`,
-                                                        )
-                                                      ) {
-                                                        rejectMutation.mutate(dispatch);
-                                                      }
-                                                    }}
-                                                    disabled={decisionPending}
-                                                  >
-                                                    <X className="mr-1 h-4 w-4" />
-                                                    Không duyệt
-                                                  </Button>
-                                                </>
-                                              )}
-                                            </div>
-                                          </TableCell>
-                                        </TableRow>
-                                      );
-                                    })}
-                                  </TableBody>
-                                </Table>
-                              </div>
-                            </AccordionContent>
-                          </AccordionItem>
-                        ))}
-                      </Accordion>
-                    </AccordionContent>
-                  </AccordionItem>
+      {workspaceView === "review" && (
+        <div className="mx-auto max-w-3xl space-y-3 print:hidden">
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={activeBranch?.code || "all"} onValueChange={setBranchFilter}>
+              <SelectTrigger className="h-8 w-[180px] text-xs" aria-label="Lọc chi nhánh">
+                <SelectValue placeholder="Chi nhánh" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Tất cả chi nhánh</SelectItem>
+                {branchOptions.map((branch) => (
+                  <SelectItem key={branch.code} value={branch.code}>{branch.label}</SelectItem>
                 ))}
-              </Accordion>
-            )}
+              </SelectContent>
+            </Select>
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Đơn tuần — cuộn độc lập, không kéo dài toàn trang */}
-      {canManage && (
-        <Card className="print:hidden shadow-sm">
-          <CardHeader className="flex flex-col gap-3 space-y-0 py-3 px-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle className="text-base">
-                Đơn tuần {currentWeekly ? `từ ${currentWeekly.week_start}` : ""} —{" "}
-                {branchScopeLabel}
+          <Card className="shadow-sm">
+            <CardHeader className="py-3 px-4">
+              <CardTitle className="text-sm">
+                Đơn chờ duyệt — {branchScopeLabel}
               </CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {activeBranch
-                  ? `Chỉ hiển thị phần hàng phân bổ cho ${activeBranch.label} (${visibleWeeklyItems.length} mã · tổng ${weeklyTotalQty}).`
-                  : "Danh sách hàng đã cộng dồn theo mã hàng của tất cả chi nhánh."}
-              </p>
-            </div>
-            {currentWeekly && (
-              <div className="flex flex-wrap gap-2 shrink-0">
+            </CardHeader>
+            <CardContent className="max-h-[48vh] overflow-y-auto p-2 pt-0">
+              {renderDispatchGroups(
+                groupedPending,
+                activeBranch
+                  ? `Chi nhánh ${activeBranch.label} không có đơn chờ duyệt.`
+                  : "Không có đơn đề nghị xuất đang chờ duyệt.",
+              )}
+            </CardContent>
+          </Card>
+          {canManage && (
+            <Card className="shadow-sm">
+              <CardHeader className="py-3 px-4">
+                <CardTitle className="text-sm">
+                  Đơn tuần {currentWeekly ? `từ ${currentWeekly.week_start}` : ""} — đang gom
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="max-h-[28vh] overflow-auto p-0">
+                {currentWeekly ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="pl-4">Mã hàng</TableHead>
+                        <TableHead>Tên hàng</TableHead>
+                        <TableHead>ĐVT</TableHead>
+                        <TableHead className="pr-4 text-right">SL</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {visibleWeeklyItems.length ? (
+                        visibleWeeklyItems.map((item) => (
+                          <TableRow key={item.id || item.line_no}>
+                            <TableCell className="pl-4 font-mono text-xs">{item.product_code}</TableCell>
+                            <TableCell>{item.product_name}</TableCell>
+                            <TableCell>{item.unit || "—"}</TableCell>
+                            <TableCell className="pr-4 text-right tabular-nums">{item.quantity}</TableCell>
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">
+                            Đơn tuần chưa có hàng.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <p className="px-4 py-6 text-sm text-muted-foreground">Chưa có đơn tuần.</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {workspaceView === "history" && (
+        <div className="mx-auto max-w-3xl space-y-3 print:hidden">
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={activeBranch?.code || "all"} onValueChange={setBranchFilter}>
+              <SelectTrigger className="h-8 w-[180px] text-xs" aria-label="Lọc chi nhánh">
+                <SelectValue placeholder="Chi nhánh" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Tất cả chi nhánh</SelectItem>
+                {branchOptions.map((branch) => (
+                  <SelectItem key={branch.code} value={branch.code}>{branch.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {canManage && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => exportHistory(dispatches, weeklyOrders, activeBranch)}
+              >
+                <FileDown className="mr-1 h-3.5 w-3.5" />
+                Xuất Excel
+              </Button>
+            )}
+            {canManage && currentWeekly && (
+              <>
                 <Button
                   variant="outline"
                   size="sm"
+                  className="h-8 text-xs"
                   onClick={() => printMutation.mutate(currentWeekly)}
                   disabled={printMutation.isPending || !visibleWeeklyItems.length}
                 >
-                  <Printer className="mr-2 h-4 w-4" />
-                  {activeBranch ? `In phiếu ${activeBranch.label}` : "In phiếu tổng hợp"}
+                  <Printer className="mr-1 h-3.5 w-3.5" />
+                  In phiếu
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
+                  className="h-8 text-xs"
                   onClick={printByBranch}
                   disabled={markPrintedMutation.isPending || !branchSheets.length}
                 >
-                  <Printer className="mr-2 h-4 w-4" />
-                  {activeBranch
-                    ? "In phiếu riêng (tab mới)"
-                    : `In riêng từng CN (${branchSheets.length})`}
+                  <Printer className="mr-1 h-3.5 w-3.5" />
+                  In từng CN
                 </Button>
                 {canComplete && currentWeekly.status !== "processed" && (
                   <Button
                     size="sm"
+                    className="h-8 text-xs"
                     onClick={() => completeMutation.mutate(currentWeekly)}
                     disabled={completeMutation.isPending}
                   >
-                    <Check className="mr-2 h-4 w-4" />
-                    Xác nhận đã xử lý
+                    <Check className="mr-1 h-3.5 w-3.5" />
+                    Đã xử lý
                   </Button>
                 )}
-              </div>
+              </>
             )}
-          </CardHeader>
-          <CardContent className="p-0">
-            {currentWeekly ? (
-              <div className="max-h-[40vh] overflow-y-auto overflow-x-auto border-t">
-                <Table>
-                  <TableHeader className="sticky top-0 z-10 bg-background">
-                    <TableRow>
-                      <TableHead className="pl-4">STT</TableHead>
-                      <TableHead>Mã hàng</TableHead>
-                      <TableHead>Tên hàng</TableHead>
-                      <TableHead>ĐVT</TableHead>
-                      <TableHead className="text-right">
-                        {activeBranch ? `SL ${activeBranch.label}` : "Tổng SL"}
-                      </TableHead>
-                      <TableHead className="pr-4">Chi nhánh xuất (SL)</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {!visibleWeeklyItems.length ? (
-                      <TableRow>
-                        <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                          {activeBranch
-                            ? `Chi nhánh ${activeBranch.label} không có hàng trong đơn tuần này.`
-                            : "Đơn tuần chưa có dòng hàng."}
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      (() => {
-                        let stt = 0;
-                        return visibleWeeklyItems.map((item) => {
-                          stt += 1;
-                          return (
-                            <TableRow key={item.id || item.line_no}>
-                              <TableCell className="pl-4">{stt}</TableCell>
-                              <TableCell className="font-mono text-xs">
-                                {item.product_code}
-                              </TableCell>
-                              <TableCell>{item.product_name}</TableCell>
-                              <TableCell>{item.unit || "—"}</TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {item.quantity}
-                              </TableCell>
-                              <TableCell className="pr-4 text-xs text-muted-foreground">
-                                {branchCellText(item)}
-                              </TableCell>
-                            </TableRow>
-                          );
-                        });
-                      })()
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-            ) : (
-              <p className="px-4 py-6 text-sm text-muted-foreground">
-                Chưa có đơn tuần được tạo.
-              </p>
-            )}
-          </CardContent>
-        </Card>
+          </div>
+          <Card className="shadow-sm">
+            <CardHeader className="py-3 px-4">
+              <CardTitle className="text-sm">Lịch sử đề nghị — {branchScopeLabel}</CardTitle>
+            </CardHeader>
+            <CardContent className="max-h-[52vh] overflow-y-auto p-2 pt-0">
+              {renderDispatchGroups(
+                groupedHistory,
+                activeBranch
+                  ? `Chi nhánh ${activeBranch.label} chưa có lịch sử.`
+                  : "Chưa có đơn đã duyệt / từ chối / xử lý.",
+              )}
+            </CardContent>
+          </Card>
+        </div>
       )}
+
+
+
 
       {canManage && currentWeekly ? (
         <section className="internal-weekly-print hidden print:block">
@@ -1090,195 +1250,6 @@ export default function InternalDispatchWorkspace() {
         </section>
       ) : null}
 
-      {/* FAB — tạo đơn mới */}
-      {warehouseId && (
-        <Button
-          type="button"
-          aria-label="Tạo đơn xuất nội bộ"
-          title="Tạo đơn xuất nội bộ"
-          className="fixed bottom-8 right-8 z-50 h-14 w-14 rounded-full p-0 shadow-xl hover:shadow-2xl print:hidden"
-          onClick={() => setCreateOpen(true)}
-        >
-          <Plus className="h-6 w-6" />
-        </Button>
-      )}
-
-      {/* Sheet tạo đơn — Form Sections bằng Card */}
-      <Sheet open={createOpen} onOpenChange={setCreateOpen}>
-        <SheetContent
-          side="right"
-          className="flex w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-xl print:hidden"
-        >
-          <SheetHeader className="shrink-0 space-y-1 border-b px-5 py-4 text-left">
-            <SheetTitle>Tạo đơn xuất nội bộ</SheetTitle>
-            <SheetDescription>
-              {warehouseLabel
-                ? `Chi nhánh: ${warehouseLabel}`
-                : "Thêm mặt hàng và gửi quản lý duyệt."}
-            </SheetDescription>
-          </SheetHeader>
-
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-4">
-            <Card className="shadow-sm">
-              <CardHeader className="pb-2 pt-4 px-4">
-                <CardTitle className="text-sm font-semibold text-muted-foreground">
-                  Thông tin chung
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-3 px-4 pb-4 sm:grid-cols-2">
-                <div>
-                  <div className="text-xs text-muted-foreground">Chi nhánh gửi</div>
-                  <div className="mt-0.5 text-sm font-medium">{warehouseLabel || "—"}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-muted-foreground">Trạng thái sau gửi</div>
-                  <div className="mt-0.5 text-sm font-medium">Chờ quản lý duyệt</div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="shadow-sm">
-              <CardHeader className="pb-2 pt-4 px-4">
-                <CardTitle className="text-sm font-semibold text-muted-foreground">
-                  Bảng mặt hàng
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 px-4 pb-4">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                  <ProductSearchInput
-                    className="relative flex-1"
-                    label="Tìm sản phẩm"
-                    value={productSearch}
-                    onChange={(value) => {
-                      setProductSearch(value);
-                      setSelectedProduct("");
-                    }}
-                    suggestions={productSuggestions}
-                    open={!!productSearch.trim()}
-                    onOpenChange={() => {}}
-                    showWhenTyping
-                    onPick={(product) => pickProduct(product.id)}
-                    placeholder="Gõ mã hàng, mã vạch hoặc tên sản phẩm..."
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={addProduct}
-                    disabled={!selectedProduct}
-                  >
-                    <Plus className="mr-1 h-4 w-4" />
-                    Thêm hàng
-                  </Button>
-                </div>
-                <div className="overflow-x-auto rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>STT</TableHead>
-                        <TableHead>Mã hàng</TableHead>
-                        <TableHead>Tên hàng</TableHead>
-                        <TableHead>SL</TableHead>
-                        <TableHead>ĐVT</TableHead>
-                        <TableHead />
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {lines.length ? (
-                        lines.map((line, index) => (
-                          <TableRow key={`${line.product_id}-${index}`}>
-                            <TableCell>{index + 1}</TableCell>
-                            <TableCell className="font-mono text-xs">
-                              {line.product_code}
-                            </TableCell>
-                            <TableCell>{line.product_name}</TableCell>
-                            <TableCell>
-                              <Input
-                                className="w-24"
-                                type="number"
-                                min="0.001"
-                                step="0.001"
-                                value={line.quantity}
-                                onChange={(event) =>
-                                  setLines((current) =>
-                                    current.map((item, itemIndex) =>
-                                      itemIndex === index
-                                        ? { ...item, quantity: Number(event.target.value) }
-                                        : item,
-                                    ),
-                                  )
-                                }
-                              />
-                            </TableCell>
-                            <TableCell>{line.unit || "—"}</TableCell>
-                            <TableCell>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                aria-label="Xóa dòng"
-                                onClick={() =>
-                                  setLines((current) =>
-                                    current.filter((_, itemIndex) => itemIndex !== index),
-                                  )
-                                }
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      ) : (
-                        <TableRow>
-                          <TableCell
-                            colSpan={6}
-                            className="py-8 text-center text-muted-foreground"
-                          >
-                            Chưa có mặt hàng.
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="shadow-sm sticky bottom-0 mt-auto border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-              <CardHeader className="pb-2 pt-4 px-4">
-                <CardTitle className="text-sm font-semibold text-muted-foreground">
-                  Hành động
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 px-4 pb-4">
-                <div>
-                  <Label htmlFor="dispatch-notes">Ghi chú</Label>
-                  <Textarea
-                    id="dispatch-notes"
-                    className="mt-1.5"
-                    value={notes}
-                    onChange={(event) => setNotes(event.target.value)}
-                  />
-                </div>
-                <div className="flex justify-end gap-2">
-                  <Button variant="outline" onClick={() => setCreateOpen(false)}>
-                    Hủy
-                  </Button>
-                  <Button
-                    onClick={() => createMutation.mutate()}
-                    disabled={!lines.length || createMutation.isPending}
-                  >
-                    {createMutation.isPending ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Send className="mr-2 h-4 w-4" />
-                    )}
-                    Gửi quản lý
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </SheetContent>
-      </Sheet>
 
       <InternalDispatchDetailDialog
         open={!!viewDispatch}
