@@ -74,6 +74,7 @@ import {
   peekLocalDraft,
   useLocalDraft,
 } from "@/hooks/useLocalDraft";
+import { supabase } from "@/integrations/supabase/client";
 
 interface CartLine {
   key: string;
@@ -89,6 +90,25 @@ interface CartLine {
   stockQty: number | null;
   /** SKU gõ tay / không có trong catalog — mở khóa tên/ĐVT/MV */
   isCustomSku?: boolean;
+  /** Hàng tặng kèm (giá 0, khóa sửa lẻ — chỉ thao tác qua mã A) */
+  isPromo?: boolean;
+  /** `key` của dòng mã A để đồng bộ số lượng */
+  parentPromoKey?: string;
+}
+
+/** Một dòng của view `v_active_promotions` (mua A tặng B) */
+interface PromotionRule {
+  buy_product_slug: string;
+  get_product_slug: string;
+  get_product_name: string | null;
+  get_product_barcode: string | null;
+  get_product_unit: string | null;
+  get_quantity_ratio: number | null;
+}
+
+function promoRatio(rule: PromotionRule | undefined): number {
+  const r = Number(rule?.get_quantity_ratio);
+  return Number.isFinite(r) && r > 0 ? r : 1;
 }
 
 type TransferFormDraft = {
@@ -184,6 +204,34 @@ const CreateWarehouseOrderForm = forwardRef<
   );
   const [dupOpen, setDupOpen] = useState(false);
   const [dupInfo, setDupInfo] = useState<DuplicatePreSaveResult | null>(null);
+  const [promotions, setPromotions] = useState<PromotionRule[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchPromos = async () => {
+      const { data, error } = await supabase
+        .from("v_active_promotions" as never)
+        .select("*");
+      if (cancelled) return;
+      if (error) {
+        console.warn("v_active_promotions:", error.message);
+        return;
+      }
+      setPromotions(((data as unknown) as PromotionRule[] | null) || []);
+    };
+    void fetchPromos();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const findPromoRule = (buySlug: string): PromotionRule | undefined => {
+    const ma = normalizeOrderCodeText(buySlug);
+    if (!ma) return undefined;
+    return promotions.find(
+      (pr) => normalizeOrderCodeText(pr.buy_product_slug) === ma,
+    );
+  };
 
   const draftPayload = useMemo(
     (): TransferFormDraft => ({
@@ -309,6 +357,33 @@ const CreateWarehouseOrderForm = forwardRef<
     [lines],
   );
 
+  /** Dòng hàng tặng B móc nối với mã A (`parentPromoKey`), giá 0 */
+  const buildPromoLine = (
+    rule: PromotionRule,
+    parentKey: string,
+    qtyA: number,
+  ): CartLine => {
+    const slugB = normalizeOrderCodeText(rule.get_product_slug);
+    const hitB = catalogList.find(
+      (c) => normalizeOrderCodeText(c.slug) === slugB,
+    );
+    const unitB = rule.get_product_unit || hitB?.unit || "cái";
+    return {
+      key: `${Date.now()}-promo-${slugB}-${parentKey}`,
+      maHang: slugB,
+      maVach: rule.get_product_barcode || hitB?.barcode || "",
+      tenHang: `[TẶNG] ${rule.get_product_name || hitB?.name || slugB}`,
+      dvt: unitB,
+      unitOptions: [],
+      quantity: qtyA * promoRatio(rule),
+      productId: hitB?.id || null,
+      price: 0,
+      stockQty: getQty(slugB, unitB),
+      isPromo: true,
+      parentPromoKey: parentKey,
+    };
+  };
+
   const addProduct = (p: CatalogHit, preferredBarcode?: string) => {
     const block = checkCatalogAddBlocked(p);
     if (block.blocked) {
@@ -343,33 +418,61 @@ const CreateWarehouseOrderForm = forwardRef<
       opts[0];
     const unit = picked?.unit || p.unit || "cái";
     const barcode = picked?.barcode || p.barcode || "";
+    const promoRule = findPromoRule(ma);
+    const qtyA = 1;
 
     setLines((prev) => {
       const exist = prev.find(
         (l) =>
+          !l.isPromo &&
           normalizeOrderCodeText(l.maHang) === ma &&
           normalizeOrderCodeText(l.dvt) === normalizeOrderCodeText(unit),
       );
       if (exist) {
-        return prev.map((l) =>
-          l.key === exist.key ? { ...l, quantity: l.quantity + 1 } : l,
+        const nextQtyA = exist.quantity + qtyA;
+        const hasChild = prev.some(
+          (l) => l.isPromo && l.parentPromoKey === exist.key,
         );
+        const next = prev.map((l) => {
+          if (l.key === exist.key) return { ...l, quantity: nextQtyA };
+          // Mã B ăn theo mã A → tính lại theo tỷ lệ tặng
+          if (l.isPromo && l.parentPromoKey === exist.key) {
+            return { ...l, quantity: nextQtyA * promoRatio(promoRule) };
+          }
+          return l;
+        });
+        // A đã có trong giỏ (vd. từ bản nháp) nhưng chưa có B → bổ sung
+        if (promoRule && !hasChild) {
+          const idx = next.findIndex((l) => l.key === exist.key);
+          next.splice(
+            idx + 1,
+            0,
+            buildPromoLine(promoRule, exist.key, nextQtyA),
+          );
+        }
+        return next;
       }
-      return [
+
+      const mainKey = `${Date.now()}-${ma}-${unit}`;
+      const newLines: CartLine[] = [
         {
-          key: `${Date.now()}-${ma}-${unit}`,
+          key: mainKey,
           maHang: ma,
           maVach: barcode,
           tenHang: p.name,
           dvt: unit,
           unitOptions: opts,
-          quantity: 1,
+          quantity: qtyA,
           productId: picked?.productId || p.id,
           price: picked?.price ?? p.price ?? 0,
           stockQty: getQty(ma, unit),
+          isPromo: false,
         },
-        ...prev,
       ];
+      if (promoRule) {
+        newLines.push(buildPromoLine(promoRule, mainKey, qtyA));
+      }
+      return [...newLines, ...prev];
     });
     setScan("");
     scanRef.current?.focus();
@@ -465,13 +568,32 @@ const CreateWarehouseOrderForm = forwardRef<
   };
 
   const setQty = (key: string, qty: number) => {
-    setLines((prev) =>
-      prev
-        .map((l) =>
-          l.key === key ? { ...l, quantity: Math.max(0, qty) } : l,
-        )
-        .filter((l) => l.quantity > 0),
-    );
+    setLines((prev) => {
+      const target = prev.find((l) => l.key === key);
+      if (!target) return prev;
+      // Hàng tặng chỉ đổi số lượng qua mã A
+      if (target.isPromo) return prev;
+      const newQty = Math.max(0, qty);
+      const rule = findPromoRule(target.maHang);
+      return prev
+        .map((l) => {
+          if (l.key === key) return { ...l, quantity: newQty };
+          if (l.isPromo && l.parentPromoKey === key) {
+            return { ...l, quantity: newQty * promoRatio(rule) };
+          }
+          return l;
+        })
+        .filter((l) => l.quantity > 0);
+    });
+  };
+
+  /** Xóa mã A → xóa luôn dòng hàng tặng đi kèm; không xóa lẻ dòng tặng */
+  const removeLine = (key: string) => {
+    setLines((prev) => {
+      const target = prev.find((l) => l.key === key);
+      if (target?.isPromo) return prev;
+      return prev.filter((x) => x.key !== key && x.parentPromoKey !== key);
+    });
   };
 
   /** Đổi ĐVT → sync mã vạch ngay (giữ mã hàng + tên) */
@@ -837,9 +959,7 @@ const CreateWarehouseOrderForm = forwardRef<
           onUnit={setLineUnit}
           onBarcode={setLineBarcode}
           onName={setLineName}
-          onRemove={(key) =>
-            setLines((prev) => prev.filter((x) => x.key !== key))
-          }
+          onRemove={removeLine}
         />
 
         <div className="flex flex-wrap items-center justify-between gap-3 pt-2">

@@ -46,6 +46,9 @@ export type OrderGridLine = {
   productId: string | null;
   stockQty: number | null;
   isCustomSku?: boolean;
+  /** Hàng tặng kèm — khóa giá/SL/xóa, thao tác qua mã A */
+  isPromo?: boolean;
+  parentPromoKey?: string;
 };
 
 export type OrderItemsGridProps = {
@@ -113,13 +116,15 @@ export function OrderItemsGrid({
             </TableRow>
           ) : (
             lines.map((l, idx) => {
-              const loi = isLoiMaSku(l.maHang);
+              const isPromo = !!l.isPromo;
+              const loi = !isPromo && isLoiMaSku(l.maHang);
               const liveOpts = getSkuUnitOptions(skuUnitIndex, l.maHang);
               const unitOpts =
                 liveOpts.length > 0 ? liveOpts : l.unitOptions;
               const isCustom =
-                !!l.isCustomSku || (!l.productId && !unitOpts.length);
-              const hasUnits = unitOpts.length > 0 && !isCustom;
+                !isPromo &&
+                (!!l.isCustomSku || (!l.productId && !unitOpts.length));
+              const hasUnits = unitOpts.length > 0 && !isCustom && !isPromo;
               const unitLocked = unitOpts.length === 1 && !isCustom;
               const tonLive =
                 getQty(l.maHang, l.dvt) ??
@@ -130,9 +135,19 @@ export function OrderItemsGrid({
                   key={l.key}
                   className={cn(
                     excelTr,
-                    (loi || isCustom) && "bg-emerald-50/70",
-                    !loi && !isCustom && idx % 2 === 1 && "bg-slate-50/70",
+                    isPromo && "bg-purple-50",
+                    !isPromo && (loi || isCustom) && "bg-emerald-50/70",
+                    !isPromo &&
+                      !loi &&
+                      !isCustom &&
+                      idx % 2 === 1 &&
+                      "bg-slate-50/70",
                   )}
+                  title={
+                    isPromo
+                      ? "Hàng tặng — số lượng tự tính theo mã chính, không sửa/xóa lẻ"
+                      : undefined
+                  }
                 >
                   <TableCell
                     className={cn(excelTd, "text-muted-foreground text-center")}
@@ -145,6 +160,7 @@ export function OrderItemsGrid({
                         "font-mono text-[13px] font-bold leading-tight uppercase",
                         loi && "text-red-700",
                         isCustom && "text-emerald-800",
+                        isPromo && "text-purple-800",
                       )}
                       title={
                         isCustom
@@ -158,16 +174,26 @@ export function OrderItemsGrid({
                           MỚI
                         </span>
                       ) : null}
+                      {isPromo ? (
+                        <span className="ml-1 rounded bg-purple-200 px-1 text-[10px] font-semibold text-purple-900">
+                          HÀNG TẶNG
+                        </span>
+                      ) : null}
                     </div>
+                    {isPromo ? (
+                      <div className="text-[10px] font-medium text-purple-700">
+                        Đơn giá: 0 (Khuyến mãi)
+                      </div>
+                    ) : null}
                   </TableCell>
                   <TableCell className={excelTd}>
                     <Input
                       className={cn(
                         "h-7 text-sm font-mono p-1",
-                        hasUnits && !loi && "bg-muted",
+                        (isPromo || (hasUnits && !loi)) && "bg-muted",
                       )}
                       value={l.maVach}
-                      readOnly={hasUnits && !loi && !isCustom}
+                      readOnly={isPromo || (hasUnits && !loi && !isCustom)}
                       onChange={(e) => onBarcode(l.key, e.target.value)}
                       placeholder="Mã vạch"
                       title={
@@ -182,6 +208,7 @@ export function OrderItemsGrid({
                       excelTd,
                       "font-medium text-[13px]",
                       loi && "text-red-700",
+                      isPromo && "text-purple-900",
                     )}
                   >
                     {isCustom || loi ? (
@@ -198,8 +225,9 @@ export function OrderItemsGrid({
                   <TableCell className={excelTd}>
                     {!hasUnits || loi || isCustom ? (
                       <Input
-                        className="h-7 text-sm p-1"
+                        className={cn("h-7 text-sm p-1", isPromo && "bg-muted")}
                         value={l.dvt}
+                        readOnly={isPromo}
                         onChange={(e) => onUnit(l.key, e.target.value)}
                         placeholder="ĐVT"
                       />
@@ -253,13 +281,19 @@ export function OrderItemsGrid({
                         size="icon"
                         variant="outline"
                         className="h-7 w-7 shrink-0"
+                        disabled={isPromo}
                         onClick={() => onQty(l.key, l.quantity - 1)}
                       >
                         <Minus className="w-3 h-3" />
                       </Button>
                       <QtyInput
-                        className="w-12 text-center h-7 p-1"
+                        className={cn(
+                          "w-12 text-center h-7 p-1",
+                          isPromo && "bg-muted",
+                        )}
                         value={l.quantity}
+                        readOnly={isPromo}
+                        disabled={isPromo}
                         onValueChange={(v) => onQty(l.key, v)}
                       />
                       <Button
@@ -267,6 +301,7 @@ export function OrderItemsGrid({
                         size="icon"
                         variant="outline"
                         className="h-7 w-7 shrink-0"
+                        disabled={isPromo}
                         onClick={() => onQty(l.key, l.quantity + 1)}
                       >
                         <Plus className="w-3 h-3" />
@@ -279,9 +314,20 @@ export function OrderItemsGrid({
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7"
+                      disabled={isPromo}
+                      title={
+                        isPromo
+                          ? "Xóa mã chính để bỏ hàng tặng"
+                          : undefined
+                      }
                       onClick={() => onRemove(l.key)}
                     >
-                      <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                      <Trash2
+                        className={cn(
+                          "w-3.5 h-3.5",
+                          isPromo ? "text-muted-foreground" : "text-destructive",
+                        )}
+                      />
                     </Button>
                   </TableCell>
                 </TableRow>
