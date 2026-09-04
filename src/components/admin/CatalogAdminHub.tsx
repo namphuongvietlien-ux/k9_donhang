@@ -35,7 +35,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import CatalogStockImport from "@/components/admin/CatalogStockImport";
+import ProductGiftsPanel from "@/components/admin/ProductGiftsPanel";
 import {
   filterCatalogFlagItems,
   useCatalogFlagAdminList,
@@ -1017,6 +1017,13 @@ export default function CatalogAdminHub() {
             <RefreshCw className="h-3.5 w-3.5" />
             5. Chuyển Mã Hàng
           </TabsTrigger>
+          <TabsTrigger
+            value="gifts"
+            className="text-xs gap-1 data-[state=active]:bg-white"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            6. Hàng tặng kèm
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="variants" className="p-4 mt-0">
@@ -1072,6 +1079,9 @@ export default function CatalogAdminHub() {
 
         <TabsContent value="sku-mapping" className="p-4 mt-0">
           <SkuCodeMappingManager />
+        </TabsContent>
+        <TabsContent value="gifts" className="p-4 mt-0">
+          <ProductGiftsPanel />
         </TabsContent>
       </Tabs>
     </div>

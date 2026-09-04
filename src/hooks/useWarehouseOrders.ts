@@ -85,6 +85,9 @@ export interface WarehouseOrderFilters {
   warehouseId?: string | null;
   sourceWarehouseId?: string | null;
   search?: string;
+  /** ISO date yyyy-MM-dd inclusive */
+  dateFrom?: string | null;
+  dateTo?: string | null;
   limit?: number;
 }
 
@@ -331,6 +334,38 @@ async function loadOrderTelegramCtx(orderId: string) {
   };
 }
 
+function applyWarehouseOrderFilters<T extends { eq: (c: string, v: unknown) => T; in: (c: string, v: unknown[]) => T; or: (c: string) => T; gte: (c: string, v: string) => T; lte: (c: string, v: string) => T }>(
+  q: T,
+  filters: WarehouseOrderFilters,
+): T {
+  let next = q;
+  if (filters.kind && filters.kind !== "ALL") {
+    next = next.eq("order_kind" as never, filters.kind);
+  } else {
+    next = next.in("order_kind" as never, ["DH", "DC"]);
+  }
+  if (filters.status && filters.status !== "ALL") {
+    next = next.eq("status", filters.status);
+  }
+  if (filters.warehouseId) {
+    next = next.eq("warehouse_id" as never, filters.warehouseId);
+  }
+  if (filters.sourceWarehouseId) {
+    next = next.eq("source_warehouse_id" as never, filters.sourceWarehouseId);
+  }
+  if (filters.search?.trim()) {
+    const s = filters.search.trim();
+    next = next.or(`order_code.ilike.%${s}%,customer_name.ilike.%${s}%`);
+  }
+  if (filters.dateFrom) {
+    next = next.gte("created_at", `${filters.dateFrom}T00:00:00+07:00`);
+  }
+  if (filters.dateTo) {
+    next = next.lte("created_at", `${filters.dateTo}T23:59:59.999+07:00`);
+  }
+  return next;
+}
+
 export function useWarehouseOrders(filters: WarehouseOrderFilters = {}) {
   const { products: sharedProducts = [] } = useProducts();
   const productSignature = sharedProducts
@@ -340,57 +375,25 @@ export function useWarehouseOrders(filters: WarehouseOrderFilters = {}) {
   return useQuery({
     queryKey: ["warehouse-orders", filters, productSignature],
     queryFn: async () => {
-      let q = supabase
-        .from("orders")
-        .select(ORDER_SELECT)
-        .order("created_at", { ascending: false })
-        .limit(filters.limit ?? 150);
-
-      if (filters.kind && filters.kind !== "ALL") {
-        q = q.eq("order_kind" as never, filters.kind);
-      } else {
-        q = q.in("order_kind" as never, ["DH", "DC"]);
-      }
-
-      if (filters.status && filters.status !== "ALL") {
-        q = q.eq("status", filters.status);
-      }
-      if (filters.warehouseId) {
-        q = q.eq("warehouse_id" as never, filters.warehouseId);
-      }
-      if (filters.sourceWarehouseId) {
-        q = q.eq("source_warehouse_id" as never, filters.sourceWarehouseId);
-      }
-      if (filters.search?.trim()) {
-        const s = filters.search.trim();
-        q = q.or(`order_code.ilike.%${s}%,customer_name.ilike.%${s}%`);
-      }
+      let q = applyWarehouseOrderFilters(
+        supabase
+          .from("orders")
+          .select(ORDER_SELECT)
+          .order("created_at", { ascending: false })
+          .limit(filters.limit ?? 150),
+        filters,
+      );
 
       const { data, error } = await q;
       if (error && /short_name|print_name|address/i.test(error.message || "")) {
-        let q2 = supabase
-          .from("orders")
-          .select(ORDER_SELECT_BASIC)
-          .order("created_at", { ascending: false })
-          .limit(filters.limit ?? 150);
-        if (filters.kind && filters.kind !== "ALL") {
-          q2 = q2.eq("order_kind" as never, filters.kind);
-        } else {
-          q2 = q2.in("order_kind" as never, ["DH", "DC"]);
-        }
-        if (filters.status && filters.status !== "ALL") {
-          q2 = q2.eq("status", filters.status);
-        }
-        if (filters.warehouseId) {
-          q2 = q2.eq("warehouse_id" as never, filters.warehouseId);
-        }
-        if (filters.sourceWarehouseId) {
-          q2 = q2.eq("source_warehouse_id" as never, filters.sourceWarehouseId);
-        }
-        if (filters.search?.trim()) {
-          const s = filters.search.trim();
-          q2 = q2.or(`order_code.ilike.%${s}%,customer_name.ilike.%${s}%`);
-        }
+        const q2 = applyWarehouseOrderFilters(
+          supabase
+            .from("orders")
+            .select(ORDER_SELECT_BASIC)
+            .order("created_at", { ascending: false })
+            .limit(filters.limit ?? 150),
+          filters,
+        );
         const retry = await q2;
         if (retry.error) throw retry.error;
         return ((retry.data as unknown as Record<string, unknown>[]) || []).map(
@@ -670,6 +673,15 @@ export function useWarehouseOrderMutations() {
           await supabase.from("orders").delete().eq("id", orderId);
           throw new Error(itemsErr.message);
         }
+      }
+
+      const { error: finalizeErr } = await supabase.rpc(
+        "finalize_warehouse_order" as never,
+        { _order_id: orderId } as never,
+      );
+      if (finalizeErr && !/does not exist|schema cache|PGRST202/i.test(finalizeErr.message || "")) {
+        await supabase.from("orders").delete().eq("id", orderId);
+        throw new Error(finalizeErr.message);
       }
 
       const code = (order as { order_code: string }).order_code;
@@ -979,6 +991,13 @@ export function useWarehouseOrderMutations() {
   const cancelOrder = useMutation({
     mutationFn: async (orderId: string) => {
       const ctx = await loadOrderTelegramCtx(orderId);
+      const { error: restoreErr } = await supabase.rpc(
+        "restore_order_stock" as never,
+        { _order_id: orderId } as never,
+      );
+      if (restoreErr && !/does not exist|schema cache|PGRST202/i.test(restoreErr.message || "")) {
+        throw restoreErr;
+      }
       const { error } = await supabase
         .from("orders")
         .update({ status: "cancelled" } as never)
@@ -1012,6 +1031,13 @@ export function useWarehouseOrderMutations() {
         .update({ status: "pending" } as never)
         .eq("id", orderId);
       if (error) throw error;
+      const { error: deductErr } = await supabase.rpc(
+        "deduct_order_stock" as never,
+        { _order_id: orderId } as never,
+      );
+      if (deductErr && !/does not exist|schema cache|PGRST202/i.test(deductErr.message || "")) {
+        throw deductErr;
+      }
       void notifyWarehouseEvent({
         event: "order_restored",
         ...ctx,
@@ -1151,11 +1177,25 @@ export function useWarehouseOrderMutations() {
 
       const { data: ord, error: loadErr } = await supabase
         .from("orders")
-        .select("status")
+        .select("status, stock_posted_at")
         .eq("id", input.orderId)
         .single();
-      if (loadErr) throw loadErr;
-      const st = (ord as { status: string }).status;
+      let alreadyPosted = false;
+      let st = "";
+      if (loadErr && /stock_posted_at|column/i.test(loadErr.message || "")) {
+        const fb = await supabase
+          .from("orders")
+          .select("status")
+          .eq("id", input.orderId)
+          .single();
+        if (fb.error) throw fb.error;
+        st = (fb.data as { status: string }).status;
+      } else if (loadErr) {
+        throw loadErr;
+      } else {
+        st = (ord as { status: string }).status;
+        alreadyPosted = !!(ord as { stock_posted_at?: string | null }).stock_posted_at;
+      }
       if (st === "completed") throw new Error("Phiếu đã nhận rồi.");
       if (st === "cancelled") throw new Error("Phiếu đã hủy.");
 
@@ -1167,6 +1207,7 @@ export function useWarehouseOrderMutations() {
         if (error) throw error;
       }
 
+      if (!alreadyPosted) {
       for (const line of input.lines) {
         const deduct = line.qtyReceived;
         if (deduct <= 0 || !line.productSlug) continue;
@@ -1269,6 +1310,7 @@ export function useWarehouseOrderMutations() {
             .eq("id", productId);
         }
       }
+      }
 
       const { error } = await supabase
         .from("orders")
@@ -1283,7 +1325,9 @@ export function useWarehouseOrderMutations() {
       void notifyWarehouseEvent({
         event: "order_received",
         ...ctx,
-        extra: `Trừ tồn theo ${input.lines.length} dòng nhận`,
+      extra: alreadyPosted
+        ? `Đã nhận ${input.lines.length} dòng (tồn trừ lúc tạo đơn)`
+        : `Trừ tồn theo ${input.lines.length} dòng nhận`,
       });
     },
     onSuccess: async () => {

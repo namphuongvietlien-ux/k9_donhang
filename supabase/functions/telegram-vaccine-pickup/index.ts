@@ -1,7 +1,8 @@
 /**
  * Cron: nhắc lấy vaccine theo khung giờ kho nhận.
- * - 12:00 VN  → PH, Q8, Q5
- * - 13:45 VN  → Q4 Mới (Q4_275), Q4 Cũ (Q4_178), Q1
+ * Bot: @xuatluuchuong. Group: Nhắc_lấy_Vaccin (-5485142172).
+ * - 11:00 VN  → PH, Q8, Q5
+ * - 12:30 VN  → Q4 Mới (Q4_275), Q4 Cũ (Q4_178), Q1
  * Chỉ phiếu DH/DC pending|processing, packing_date = hôm nay VN, mã hàng chứa VAC.
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -19,12 +20,12 @@ const SLOT_WAREHOUSES: Record<Slot, { codes: string[]; label: string; time: stri
   noon: {
     codes: ["PH", "Q8", "Q5"],
     label: "PH · Q8 · Q5",
-    time: "12:00",
+    time: "11:00",
   },
   afternoon: {
     codes: ["Q4_275", "Q4_178", "Q1"],
     label: "Q4 Mới · Q4 Cũ · Q1",
-    time: "13:45",
+    time: "12:30",
   },
 };
 
@@ -59,8 +60,8 @@ function isVacSku(slug: string | null | undefined) {
 
 function parseSlot(raw: unknown): Slot | null {
   const s = String(raw || "").trim().toLowerCase();
-  if (s === "noon" || s === "12" || s === "12h") return "noon";
-  if (s === "afternoon" || s === "1345" || s === "13h45") return "afternoon";
+  if (s === "noon" || s === "11" || s === "11h" || s === "1100") return "noon";
+  if (s === "afternoon" || s === "1230" || s === "12h30") return "afternoon";
   return null;
 }
 
@@ -73,10 +74,10 @@ serve(async (req) => {
     Deno.env.get("TELEGRAM_INTERNAL_BOT_TOKEN") ||
     Deno.env.get("TELEGRAM_BOT_TOKEN") ||
     "";
+  /** Group Nhắc_lấy_Vaccin — không dùng group xuất nội bộ. */
   const groupChatId =
-    Deno.env.get("TELEGRAM_INTERNAL_CHAT_ID") ||
-    Deno.env.get("TELEGRAM_CHAT_ID") ||
-    "";
+    Deno.env.get("TELEGRAM_VACCINE_CHAT_ID") ||
+    "-5485142172";
   const requestToken = req.headers.get("x-k9-cron-token") || "";
   if (!url || !serviceKey || !botToken || !groupChatId || !requestToken) {
     return json({ error: "Server configuration error" }, 500);

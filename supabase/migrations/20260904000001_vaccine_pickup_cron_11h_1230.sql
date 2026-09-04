@@ -1,14 +1,6 @@
--- Chạy trên Supabase SQL Editor / db query.
--- Hẹn giờ Telegram nhắc lấy vaccine (giờ VN):
--- 11:00 PH-Q8-Q5 | 12:30 Q4 Mới-Q4 Cũ-Q1
--- 11:00 VN = 04:00 UTC | 12:30 VN = 05:30 UTC
-
-CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA extensions;
-CREATE EXTENSION IF NOT EXISTS pg_net WITH SCHEMA extensions;
-
-INSERT INTO public.telegram_scheduled_job_tokens (job_name)
-VALUES ('vaccine-pickup')
-ON CONFLICT (job_name) DO NOTHING;
+-- Đổi giờ nhắc lấy vaccine (Asia/Ho_Chi_Minh)
+-- 11:00 VN = 04:00 UTC  → PH, Q8, Q5
+-- 12:30 VN = 05:30 UTC  → Q4 Mới, Q4 Cũ, Q1
 
 SELECT cron.unschedule(jobid)
 FROM cron.job

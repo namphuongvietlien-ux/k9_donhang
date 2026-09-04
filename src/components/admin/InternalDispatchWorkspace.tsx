@@ -39,6 +39,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -324,6 +325,7 @@ export default function InternalDispatchWorkspace() {
   const [branchFilter, setBranchFilter] = useState("all");
   const [pickedWarehouseId, setPickedWarehouseId] = useState("");
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("request");
+  const [selectedDispatchIds, setSelectedDispatchIds] = useState<string[]>([]);
   const [isLinkingTelegram, setIsLinkingTelegram] = useState(false);
   /** Phiếu đang mở ở "mắt xem đơn" — giữ id để dữ liệu luôn theo query mới nhất */
   const [viewDispatchId, setViewDispatchId] = useState<string | null>(null);
@@ -482,18 +484,26 @@ export default function InternalDispatchWorkspace() {
       ));
     },
   });
-  const completeMutation = useMutation({
-    mutationFn: async (weekly: WeeklyOrder) => {
-      const { error } = await supabase.rpc("complete_weekly_order" as never, { _weekly_order_id: weekly.id } as never);
+  const completeSelectedMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      if (!ids.length) throw new Error("Chưa chọn đơn nào.");
+      const { data, error } = await supabase.rpc("complete_internal_dispatches" as never, {
+        _dispatch_ids: ids,
+      } as never);
       if (error) throw error;
-      return weekly;
+      const count = Number(data) || 0;
+      if (!count) {
+        throw new Error("Không có đơn Đã duyệt nào được cập nhật. Chỉ xác nhận các phiếu đã duyệt.");
+      }
+      return count;
     },
-    onSuccess: async (weekly) => {
+    onSuccess: async (count) => {
+      setSelectedDispatchIds([]);
       await refresh();
-      warnIfTelegramFailed(await notifyInternalDispatchTelegram(
-        `🏢 <b>Tổng công ty đã xử lý đơn tuần</b>\nTuần từ ${escapeTelegramHtml(weekly.week_start)}\nQuản lý có thể đối chiếu và lưu hồ sơ.`,
-      ));
-    }, onError: (error: Error) => toast({ title: "Không thể hoàn tất", description: error.message, variant: "destructive" }),
+      toast({ title: `Đã xác nhận ${count} đơn đã xử lý` });
+    },
+    onError: (error: Error) =>
+      toast({ title: "Không xác nhận được", description: error.message, variant: "destructive" }),
   });
   const printMutation = useMutation({
     mutationFn: async (weekly: WeeklyOrder) => {
@@ -696,7 +706,7 @@ export default function InternalDispatchWorkspace() {
     }
   };
 
-  const renderDispatchGroups = (groups: DispatchStatusGroup[], emptyText: string) => {
+  const renderDispatchGroups = (groups: DispatchStatusGroup[], emptyText: string, batchEnabled = false) => {
     if (isLoading) {
       return (
         <div className="py-8 text-center">
@@ -727,6 +737,9 @@ export default function InternalDispatchWorkspace() {
                     <Table>
                       <TableHeader>
                         <TableRow>
+                          {batchEnabled && canComplete ? (
+                            <TableHead className="w-8 pl-2 pr-0" />
+                          ) : null}
                           <TableHead className="pl-3">Mã đơn</TableHead>
                           <TableHead>Chi nhánh</TableHead>
                           <TableHead>Ngày</TableHead>
@@ -740,8 +753,31 @@ export default function InternalDispatchWorkspace() {
                           const isSyncing = syncingDispatchId === dispatch.id;
                           const showDecide =
                             canManage && dispatch.status === "pending_manager" && !isSyncing;
+                          const canBatch =
+                            batchEnabled && canComplete && dispatch.status === "manager_approved";
+                          const checked = selectedDispatchIds.includes(dispatch.id);
                           return (
                             <TableRow key={dispatch.id}>
+                              {batchEnabled && canComplete ? (
+                                <TableCell className="pl-2 pr-0">
+                                  {canBatch ? (
+                                    <Checkbox
+                                      checked={checked}
+                                      aria-label={`Chọn ${dispatch.dispatch_code}`}
+                                      onCheckedChange={(value) => {
+                                        const on = value === true;
+                                        setSelectedDispatchIds((current) =>
+                                          on
+                                            ? current.includes(dispatch.id)
+                                              ? current
+                                              : [...current, dispatch.id]
+                                            : current.filter((id) => id !== dispatch.id),
+                                        );
+                                      }}
+                                    />
+                                  ) : null}
+                                </TableCell>
+                              ) : null}
                               <TableCell className="pl-3 font-mono text-xs">{dispatch.dispatch_code}</TableCell>
                               <TableCell>{warehouseShortLabel(dispatch.warehouses)}</TableCell>
                               <TableCell>
@@ -1132,15 +1168,19 @@ export default function InternalDispatchWorkspace() {
                   <Printer className="mr-1 h-3.5 w-3.5" />
                   In từng CN
                 </Button>
-                {canComplete && currentWeekly.status !== "processed" && (
+                {canComplete && (
                   <Button
                     size="sm"
                     className="h-8 text-xs"
-                    onClick={() => completeMutation.mutate(currentWeekly)}
-                    disabled={completeMutation.isPending}
+                    onClick={() => completeSelectedMutation.mutate(selectedDispatchIds)}
+                    disabled={completeSelectedMutation.isPending || !selectedDispatchIds.length}
                   >
-                    <Check className="mr-1 h-3.5 w-3.5" />
-                    Đã xử lý
+                    {completeSelectedMutation.isPending ? (
+                      <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Check className="mr-1 h-3.5 w-3.5" />
+                    )}
+                    Xác nhận đã xử lý ({selectedDispatchIds.length})
                   </Button>
                 )}
               </>
@@ -1156,6 +1196,7 @@ export default function InternalDispatchWorkspace() {
                 activeBranch
                   ? `Chi nhánh ${activeBranch.label} chưa có lịch sử.`
                   : "Chưa có đơn đã duyệt / từ chối / xử lý.",
+                true,
               )}
             </CardContent>
           </Card>

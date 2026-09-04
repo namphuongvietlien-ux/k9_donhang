@@ -3,6 +3,7 @@ import { Navigate, Link, useSearchParams } from "react-router-dom";
 import {
   ClipboardList,
   FileSpreadsheet,
+  FileDown,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -33,6 +34,11 @@ import DataImport from "@/components/admin/DataImport";
 import {
   useWarehouseOrders,
 } from "@/hooks/useWarehouseOrders";
+import { useWarehouses, warehouseLabel } from "@/hooks/useWarehouses";
+import {
+  exportWarehouseOrdersCsv,
+  exportWarehouseOrdersExcel,
+} from "@/lib/exportWarehouseOrders";
 import {
   WAREHOUSE_STATUS_BADGE,
   WAREHOUSE_STATUS_LABELS,
@@ -59,6 +65,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
@@ -208,14 +221,23 @@ function WarehouseLoginGate() {
 function ManageOrdersPanel() {
   const [searchParams] = useSearchParams();
   const soPhieu = searchParams.get("soPhieu");
-  const { warehouseId: scopedWhId, isStoreScoped, warehouseLabel } =
+  const { warehouseId: scopedWhId, isStoreScoped, warehouseLabel: scopedLabel } =
     useStoreScope();
+  const { warehouses } = useWarehouses();
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [branchId, setBranchId] = useState(scopedWhId || "all");
+  const warehouseId = isStoreScoped ? scopedWhId : branchId === "all" ? null : branchId;
   const { data: orders, isLoading, refetch, isFetching } = useWarehouseOrders({
     kind: "ALL",
-    limit: 100,
-    warehouseId: isStoreScoped ? scopedWhId : null,
+    limit: 2000,
+    warehouseId,
+    dateFrom: dateFrom || null,
+    dateTo: dateTo || null,
   });
   const [detailId, setDetailId] = useState<string | null>(null);
+  const stamp = new Date().toISOString().slice(0, 10);
+  const fileBase = `don-hang${dateFrom || dateTo ? `_${dateFrom || "dau"}_${dateTo || "nay"}` : ""}_${stamp}`;
 
   useEffect(() => {
     if (!soPhieu || !orders?.length) return;
@@ -229,16 +251,69 @@ function ManageOrdersPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center gap-2">
-        <p className="text-sm text-muted-foreground">
-          Tra cứu phiếu DH/DC — bấm mã để xem / sửa / soạn.
-          {isStoreScoped ? (
-            <>
-              {" "}
-              · Chỉ kho <strong>{warehouseLabel}</strong>
-            </>
-          ) : null}
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <Label className="text-xs">Từ ngày</Label>
+            <Input
+              type="date"
+              className="mt-1 h-9 w-[150px]"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+            />
+          </div>
+          <div>
+            <Label className="text-xs">Đến ngày</Label>
+            <Input
+              type="date"
+              className="mt-1 h-9 w-[150px]"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+            />
+          </div>
+          {!isStoreScoped ? (
+            <div>
+              <Label className="text-xs">Chi nhánh nhận</Label>
+              <Select value={branchId} onValueChange={setBranchId}>
+                <SelectTrigger className="mt-1 h-9 w-[180px]" aria-label="Chi nhánh">
+                  <SelectValue placeholder="Chi nhánh" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tất cả chi nhánh</SelectItem>
+                  {warehouses.map((wh) => (
+                    <SelectItem key={wh.id} value={wh.id}>
+                      {warehouseLabel(wh)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground pb-2">
+              Kho <strong>{scopedLabel}</strong>
+            </p>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9"
+            onClick={() => exportWarehouseOrdersExcel(orders || [], fileBase)}
+            disabled={!orders?.length}
+          >
+            <FileDown className="mr-1 h-4 w-4" />
+            Xuất Excel
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9"
+            onClick={() => exportWarehouseOrdersCsv(orders || [], fileBase)}
+            disabled={!orders?.length}
+          >
+            <FileDown className="mr-1 h-4 w-4" />
+            Xuất CSV
+          </Button>
+        </div>
         <Button
           variant="outline"
           size="sm"
@@ -252,6 +327,9 @@ function ManageOrdersPanel() {
           )}
         </Button>
       </div>
+      <p className="text-sm text-muted-foreground">
+        Tra cứu phiếu DH/DC — bấm mã để xem / sửa / soạn. Lọc ngày theo ngày tạo, xuất đúng bộ lọc đang xem.
+      </p>
       {isLoading ? (
         <div className="py-12 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
