@@ -35,6 +35,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import CatalogStockImport from "@/components/admin/CatalogStockImport";
 import ProductGiftsPanel from "@/components/admin/ProductGiftsPanel";
 import {
   filterCatalogFlagItems,
