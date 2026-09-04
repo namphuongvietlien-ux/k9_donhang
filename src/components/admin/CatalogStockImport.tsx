@@ -56,11 +56,15 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { normalizeOrderCodeText } from "@/lib/packingWindows";
 
+import { useStoreScope } from "@/hooks/useStoreScope";
+
 type Step = 1 | 2 | 3;
 
 interface CatalogStockImportProps {
   onSuccess?: () => void;
   className?: string;
+  /** daily: chỉ file TỔNG HỢP TỒN KHO, ẩn tab danh mục */
+  variant?: "full" | "daily";
 }
 
 async function fileToMatrix(file: File): Promise<unknown[][]> {
@@ -75,7 +79,9 @@ async function fileToMatrix(file: File): Promise<unknown[][]> {
   }
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array" });
-  const sheetName = wb.SheetNames[0];
+  const sheetName =
+    wb.SheetNames.find((n) => /t[oôồ]n\s*kho|ton\s*kho/i.test(n)) ||
+    wb.SheetNames[0];
   if (!sheetName) throw new Error("File Excel không có sheet.");
   return XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {
     header: 1,
@@ -92,11 +98,14 @@ const STEP_LABELS: Record<Step, string> = {
 export default function CatalogStockImport({
   onSuccess,
   className,
+  variant = "full",
 }: CatalogStockImportProps) {
   const { warehouses, loading: whLoading } = useWarehouses();
   const { data: catalog, isLoading: catalogLoading } = useCatalogForImport();
   const commit = useCommitCatalogStockImport();
   const { toast } = useToast();
+  const { isStoreScoped, warehouseCode } = useStoreScope();
+  const daily = variant === "daily";
 
   const [mode, setMode] = useState<CatalogStockImportMode>("stockQ7");
   const [warehouseId, setWarehouseId] = useState("");
@@ -128,9 +137,24 @@ export default function CatalogStockImport({
       try {
         if (!catalog) throw new Error("Đang tải danh mục, thử lại sau vài giây.");
         const matrix = await fileToMatrix(file);
+        const existingBySlug = new Map(
+          [...catalog.bySlug.entries()].map(([k, v]) => [
+            k,
+            { id: v.id, name: v.name, unit: v.unit, slug: v.slug || k },
+          ]),
+        );
+        const existingByBarcode = new Map(
+          [...(catalog.byBarcode?.entries() || [])].map(([k, v]) => [
+            k,
+            { id: v.id, name: v.name, unit: v.unit, slug: v.slug || k },
+          ]),
+        );
         const result = parseCatalogStockMatrix(matrix, {
           mode,
-          existingBySlug: catalog.bySlug,
+          existingBySlug,
+          existingByBarcode,
+          allowedWarehouseCodes:
+            isStoreScoped && warehouseCode ? [warehouseCode] : null,
         });
         setParsed(result);
         setStep(2);
@@ -141,7 +165,7 @@ export default function CatalogStockImport({
         setParsing(false);
       }
     },
-    [catalog, mode],
+    [catalog, mode, isStoreScoped, warehouseCode],
   );
 
   const onFiles = (files: FileList | null) => {
@@ -189,7 +213,9 @@ export default function CatalogStockImport({
       const msg =
         res.mode === "catalogFast"
           ? `Đã nhập khẩu danh mục: tạo ${res.productsCreated} mã, cập nhật ${res.productsUpdated} mã (như GAS catalogFast → Data_Excel).`
-          : `Đã import tồn: ${res.stockUpserted} dòng stock_on_hand theo mã+ĐVT (như GAS MH:|DV:), tạo thêm ${res.productsCreated} mã hàng.`;
+          : parsed.layout === "misaSummary"
+            ? `Đã cập nhật tồn hàng ngày: ${res.stockUpserted} dòng theo cột Cửa hàng (Cuối kỳ).`
+            : `Đã import tồn: ${res.stockUpserted} dòng stock_on_hand theo mã+ĐVT (như GAS MH:|DV:), tạo thêm ${res.productsCreated} mã hàng.`;
       toast({ title: "Import thành công", description: msg });
       setParsed(null);
       setFileName("");
@@ -207,6 +233,7 @@ export default function CatalogStockImport({
   const loadingBase = whLoading || catalogLoading;
   const selectedWh = warehouses.find((w) => w.id === warehouseId);
   const whLabel = selectedWh ? warehouseLabel(selectedWh) : "—";
+  const misa = parsed?.layout === "misaSummary";
 
   const previewLines = useMemo(() => parsed?.lines.slice(0, 80) ?? [], [parsed]);
 
@@ -236,14 +263,29 @@ export default function CatalogStockImport({
       <CardHeader className="pb-3 space-y-3">
         <CardTitle className="text-lg flex items-center gap-2">
           <FileSpreadsheet className="w-5 h-5 text-primary" />
-          Import danh mục &amp; tồn kho (GAS)
+          {daily
+            ? "Cập nhật tồn hàng ngày"
+            : "Import danh mục & tồn kho (GAS)"}
         </CardTitle>
         <p className="text-sm text-muted-foreground font-normal">
-          Port từ <code className="text-xs">nhapKhauCapNhatThongTin</code>:{" "}
-          <strong>catalogFast</strong> → <code className="text-xs">products</code>,{" "}
-          <strong>stockQ7</strong> → <code className="text-xs">stock_on_hand</code>.
+          {daily ? (
+            <>
+              Kéo file <strong>TỔNG HỢP TỒN KHO</strong> (MISA). Hệ thống đọc{" "}
+              <strong>Cuối kỳ</strong> theo từng <strong>Cửa hàng</strong>, bỏ
+              dòng tổng và Tổng công ty.
+            </>
+          ) : (
+            <>
+              Port từ <code className="text-xs">nhapKhauCapNhatThongTin</code>:{" "}
+              <strong>catalogFast</strong> →{" "}
+              <code className="text-xs">products</code>,{" "}
+              <strong>stockQ7</strong> →{" "}
+              <code className="text-xs">stock_on_hand</code>.
+            </>
+          )}
         </p>
 
+        {!daily && (
         <Tabs value={mode} onValueChange={handleModeChange}>
           <TabsList className="grid w-full grid-cols-2 max-w-md">
             <TabsTrigger value="stockQ7" className="gap-1.5">
@@ -256,6 +298,7 @@ export default function CatalogStockImport({
             </TabsTrigger>
           </TabsList>
         </Tabs>
+        )}
 
         <div className="flex flex-wrap items-center gap-2">
           {([1, 2, 3] as Step[]).map((s) => (
@@ -278,7 +321,7 @@ export default function CatalogStockImport({
 
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-end gap-3">
-          {mode === "stockQ7" && (
+          {mode === "stockQ7" && !daily && !misa && (
             <div className="space-y-1.5 max-w-sm flex-1 min-w-[200px]">
               <Label>Kho ghi tồn (mặc định Q7 như TON_Q7)</Label>
               <Select
@@ -345,12 +388,12 @@ export default function CatalogStockImport({
               {parsing
                 ? "Đang đọc file…"
                 : mode === "stockQ7"
-                  ? "Kéo thả file tồn kho (TON / MISA)"
+                  ? "Kéo thả TỔNG HỢP TỒN KHO (.xlsx)"
                   : "Kéo thả file nhập khẩu danh mục"}
             </p>
             <p className="text-sm text-muted-foreground mt-1">
               {mode === "stockQ7"
-                ? "Cột: Mã hàng, Tên, ĐVT, Tồn kho (như sheet TỒNG HỢP / export tồn)"
+                ? "Cột: Tên hàng hóa, Mã hàng hóa, Đơn vị tính, Cuối kỳ, Cửa hàng"
                 : "Cột: Mã hàng, Mã vạch, Tên hàng, ĐVT, Parent_SKU (như Data_Excel)"}
             </p>
             {fileName && (
@@ -384,8 +427,19 @@ export default function CatalogStockImport({
               )}
               {mode === "stockQ7" && (
                 <Badge className="bg-violet-100 text-violet-900 hover:bg-violet-100">
-                  {parsed.withStockCount} có tồn → {whLabel}
+                  {misa
+                    ? `${parsed.validCount} dòng ghi theo cửa hàng`
+                    : `${parsed.withStockCount} có tồn → ${whLabel}`}
                 </Badge>
+              )}
+              {misa &&
+                Object.entries(parsed.warehouseCounts).map(([code, n]) => (
+                  <Badge key={code} variant="outline">
+                    {code}: {n}
+                  </Badge>
+                ))}
+              {misa && parsed.skippedTotals > 0 && (
+                <Badge variant="outline">Bỏ {parsed.skippedTotals} dòng tổng</Badge>
               )}
             </div>
 
@@ -399,8 +453,9 @@ export default function CatalogStockImport({
                     <TableHead>Tên</TableHead>
                     <TableHead>ĐVT</TableHead>
                     {mode === "stockQ7" && (
-                      <TableHead className="text-right">Tồn</TableHead>
+                      <TableHead className="text-right">Cuối kỳ</TableHead>
                     )}
+                    {misa && <TableHead>Cửa hàng</TableHead>}
                     <TableHead>Ghi chú</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -422,9 +477,9 @@ export default function CatalogStockImport({
                         )}
                       </TableCell>
                       <TableCell className="font-mono text-xs text-muted-foreground">
-                        {l.maVach || (
+                        {l.maVach || (misa ? "—" : (
                           <span className="text-amber-700">thiếu</span>
-                        )}
+                        ))}
                       </TableCell>
                       <TableCell className="max-w-[220px] truncate">
                         {l.tenHang}
@@ -433,6 +488,11 @@ export default function CatalogStockImport({
                       {mode === "stockQ7" && (
                         <TableCell className="text-right tabular-nums">
                           {l.tonKho ?? "—"}
+                        </TableCell>
+                      )}
+                      {misa && (
+                        <TableCell className="text-xs whitespace-nowrap">
+                          {l.warehouseCode || l.khoRaw || "—"}
                         </TableCell>
                       )}
                       <TableCell className="text-xs text-destructive">
@@ -479,6 +539,12 @@ export default function CatalogStockImport({
                     <em>is_new</em> + highlight soạn hàng), cập nhật tên/ĐVT/mã
                     vạch cho mã đã có (ô mã vạch trống → giữ MV cũ). File thiếu
                     cột Mã vạch sẽ hiện &quot;thiếu&quot; ở preview.
+                  </>
+                ) : misa ? (
+                  <>
+                    Ghi <strong>{parsed.validCount}</strong> dòng <em>Cuối kỳ</em>{" "}
+                    vào đúng kho theo cột Cửa hàng. Dòng tổng và Tổng công ty đã
+                    bỏ. Mã không có trong danh mục không được tạo mới.
                   </>
                 ) : (
                   <>

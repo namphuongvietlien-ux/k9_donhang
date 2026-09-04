@@ -36,6 +36,12 @@ export interface Product {
   is_new?: boolean;
   is_out_stock?: boolean;
   is_locked?: boolean;
+  /** THUOC (gồm VT y tế) | HANG_HOA | DICH_VU */
+  category_group?: string | null;
+  /** 2 ký tự ngành từ SKU 10 ký tự (TA/VS/YT…) */
+  sku_industry?: string | null;
+  /** 2 ký tự chi tiết từ SKU 10 ký tự (HA/PA/TH…) */
+  sku_detail?: string | null;
   [key: string]: any;
 }
 
@@ -46,18 +52,13 @@ export function useProducts() {
     error: queryError,
     refetch,
   } = useQuery({
-    queryKey: ["shared-products-list"],
+    queryKey: ["shared-products-list", "sku-groups"],
     queryFn: async () => {
       let allData: any[] = [];
       let from = 0;
       const step = 1000;
       let fetchMore = true;
-
-      // Vòng lặp tải dữ liệu cuốn chiếu để vượt qua giới hạn 1000 dòng của Supabase
-      while (fetchMore) {
-        const { data, error } = await supabase
-          .from("products" as never)
-          .select(`
+      const baseSelect = `
             id,
             name,
             slug,
@@ -87,8 +88,18 @@ export function useProducts() {
             created_at,
             is_new,
             is_out_stock,
-            is_locked
-          `)
+            is_locked,
+            category_group`;
+      let select = `${baseSelect},
+            sku_industry,
+            sku_detail
+          `;
+
+      // Vòng lặp tải dữ liệu cuốn chiếu để vượt qua giới hạn 1000 dòng của Supabase
+      while (fetchMore) {
+        const { data, error } = await supabase
+          .from("products" as never)
+          .select(select)
           // Bắt buộc có khóa phụ DUY NHẤT (id): `name` bị trùng ở ~2.7k dòng,
           // phân trang theo cột không duy nhất làm Postgres trả thứ tự khác nhau
           // giữa các trang → mất dòng ở ranh giới trang (VD mất hẳn TAC1073,
@@ -98,6 +109,17 @@ export function useProducts() {
           .range(from, from + step - 1);
 
         if (error) {
+          if (
+            /sku_industry|sku_detail/i.test(error.message || "") &&
+            select.includes("sku_industry")
+          ) {
+            select = `${baseSelect}
+          `;
+            allData = [];
+            from = 0;
+            fetchMore = true;
+            continue;
+          }
           console.error("Error fetching products:", error);
           throw error;
         }

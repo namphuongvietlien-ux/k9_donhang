@@ -26,6 +26,10 @@ import {
   scoreCatalogItem,
 } from "@/lib/catalogSearch";
 import { checkCatalogAddBlocked } from "@/lib/catalogAddGuards";
+import {
+  isServiceCatalogItem,
+  isVisibleSellableCatalog,
+} from "@/lib/productCategory";
 import { ProductSearchInput } from "@/components/admin/ProductSearchInput";
 import { OrderItemsGrid } from "@/components/admin/OrderItemsGrid";
 import {
@@ -126,6 +130,7 @@ interface CatalogHit {
   is_new?: boolean;
   is_locked?: boolean;
   is_out_stock?: boolean;
+  category_group?: string | null;
 }
 
 interface CreateWarehouseOrderFormProps {
@@ -284,7 +289,7 @@ const CreateWarehouseOrderForm = forwardRef<
   const catalogList: CatalogHit[] = useMemo(() => {
     const rows = Array.isArray(products) ? products : [];
     return rows
-      .filter((p) => p.is_active !== false && p.slug)
+      .filter((p) => isVisibleSellableCatalog(p))
       .map((p) => ({
         id: p.id,
         name: p.name,
@@ -300,6 +305,7 @@ const CreateWarehouseOrderForm = forwardRef<
         is_new: !!p.is_new,
         is_locked: !!p.is_locked,
         is_out_stock: !!p.is_out_stock,
+        category_group: p.category_group || null,
       }));
   }, [products]);
 
@@ -353,7 +359,12 @@ const CreateWarehouseOrderForm = forwardRef<
   // Lọc mã vạch chặt (exact / prefix) đã nằm trong filterCatalogSuggestions —
   // không vá lại ở tầng form để hai nơi không lệch nhau.
   const suggestions = useMemo(
-    () => filterCatalogSuggestions(catalogList, scan, 12),
+    () =>
+      filterCatalogSuggestions(
+        catalogList.filter((p) => !isServiceCatalogItem(p)),
+        scan,
+        12,
+      ),
     [scan, catalogList],
   );
 

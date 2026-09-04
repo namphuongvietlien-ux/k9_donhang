@@ -4,6 +4,7 @@ import { z } from "zod";
 import { Upload, X, Loader2, Plus, ArrowLeft, Save, Video, Image as ImageIcon } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { generateSlug, generateUniqueSlug } from "@/lib/slug";
+import { formatRenameCounts, renameProductEverywhere } from "@/lib/renameProduct";
 import AdminLayout from "@/components/admin/AdminLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -113,6 +114,7 @@ const AdminProductForm = () => {
   const [showCategoryInput, setShowCategoryInput] = useState(false);
   const [newCategory, setNewCategory] = useState("");
   const [isSlugManuallyEdited, setIsSlugManuallyEdited] = useState(false);
+  const originalNameRef = useRef("");
   const [uploadingVideo, setUploadingVideo] = useState(false);
   const [averageCost, setAverageCost] = useState<number | null>(null);
   const { products: sharedProducts = [], loading: productsLoading } = useProducts();
@@ -186,6 +188,7 @@ const AdminProductForm = () => {
 
     setIsLoading(true);
     setAverageCost(product.average_cost ?? null);
+    originalNameRef.current = product.name || "";
     setFormData({
       name: product.name,
       slug: product.slug,
@@ -620,9 +623,28 @@ const AdminProductForm = () => {
           }
           throw error;
         } else {
+          let syncNote = `Sản phẩm "${formData.name}" đã được cập nhật`;
+          if (
+            id &&
+            formData.name.trim() !== originalNameRef.current.trim()
+          ) {
+            try {
+              const sync = await renameProductEverywhere(id, formData.name);
+              syncNote = `${syncNote}. ${formatRenameCounts(sync)}`;
+            } catch (syncErr) {
+              toast({
+                variant: "destructive",
+                title: "Tên catalog đã đổi, đơn cũ chưa đổi",
+                description:
+                  syncErr instanceof Error
+                    ? syncErr.message
+                    : "Không đồng bộ được tên trên đơn cũ",
+              });
+            }
+          }
           toast({
             title: "Đã cập nhật sản phẩm",
-            description: `Sản phẩm "${formData.name}" đã được cập nhật`,
+            description: syncNote,
           });
         }
         
@@ -706,7 +728,7 @@ const AdminProductForm = () => {
               </h1>
               <p className="text-muted-foreground mt-1">
                 {isEditing
-                  ? "Cập nhật thông tin sản phẩm"
+                  ? "Cập nhật thông tin sản phẩm. Đổi tên sẽ cập nhật luôn tên trên đơn cũ cùng mã hàng."
                   : "Điền thông tin để thêm sản phẩm mới"}
               </p>
             </div>
@@ -740,6 +762,12 @@ const AdminProductForm = () => {
                       }}
                       placeholder="Nhập tên sản phẩm"
                     />
+                    {isEditing && (
+                      <p className="text-xs text-muted-foreground">
+                        Đổi tên ở đây sẽ đổi luôn tên trên đơn / điều chuyển /
+                        phiếu XB cũ cùng mã hàng. Mã SKU không đổi.
+                      </p>
+                    )}
                     {errors.name && (
                       <p className="text-sm text-destructive">{errors.name}</p>
                     )}

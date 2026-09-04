@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Upload, X, Loader2, Plus } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { generateSlug, generateUniqueSlug } from "@/lib/slug";
+import { formatRenameCounts, renameProductEverywhere } from "@/lib/renameProduct";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -316,7 +317,23 @@ const ProductFormDialog = ({ open, onOpenChange, product, onSuccess }: ProductFo
           }
           throw error;
         }
-        toast({ title: "Đã cập nhật sản phẩm", description: `Sản phẩm "${formData.name}" đã được cập nhật` });
+        let syncNote = `Sản phẩm "${formData.name}" đã được cập nhật`;
+        if (formData.name.trim() !== (product.name || "").trim()) {
+          try {
+            const sync = await renameProductEverywhere(product.id, formData.name);
+            syncNote = `${syncNote}. ${formatRenameCounts(sync)}`;
+          } catch (syncErr) {
+            toast({
+              variant: "destructive",
+              title: "Tên catalog đã đổi, đơn cũ chưa đổi",
+              description:
+                syncErr instanceof Error
+                  ? syncErr.message
+                  : "Không đồng bộ được tên trên đơn cũ",
+            });
+          }
+        }
+        toast({ title: "Đã cập nhật sản phẩm", description: syncNote });
       } else {
         const { error } = await supabase.from("products").insert(productData);
         if (error) {

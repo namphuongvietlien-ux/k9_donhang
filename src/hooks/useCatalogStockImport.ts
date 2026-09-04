@@ -48,12 +48,14 @@ export type CatalogProductRowLite = {
   is_new?: boolean;
   is_locked?: boolean;
   is_out_stock?: boolean;
+  category_group?: string | null;
 };
 
 type BySlugEntry = {
   id: string;
   name: string;
   unit: string | null;
+  slug?: string | null;
   barcode: string | null;
   unit_2: string | null;
   barcode_2: string | null;
@@ -62,12 +64,13 @@ type BySlugEntry = {
   is_new: boolean;
   is_locked: boolean;
   is_out_stock: boolean;
+  category_group?: string | null;
 };
 
 async function fetchAllActiveProducts(): Promise<CatalogProductRowLite[]> {
   const all: CatalogProductRowLite[] = [];
   const selectFull =
-    "id, name, slug, unit, barcode, unit_2, barcode_2, price, parent_sku, is_new, is_locked, is_out_stock";
+    "id, name, slug, unit, barcode, unit_2, barcode_2, price, parent_sku, is_new, is_locked, is_out_stock, category_group";
   const selectFallback = "id, name, slug, unit, barcode, price";
 
   for (let from = 0; ; from += PAGE) {
@@ -83,7 +86,7 @@ async function fetchAllActiveProducts(): Promise<CatalogProductRowLite[]> {
 
     if (
       full.error &&
-      /unit_2|barcode_2|is_new|is_locked|parent_sku|is_out_stock/i.test(
+      /unit_2|barcode_2|is_new|is_locked|parent_sku|is_out_stock|category_group/i.test(
         full.error.message || "",
       )
     ) {
@@ -126,6 +129,7 @@ export function useCatalogForImport() {
       const data = await fetchAllActiveProducts();
 
       const bySlug = new Map<string, BySlugEntry>();
+      const byBarcode = new Map<string, BySlugEntry>();
       const bestByNorm = new Map<string, CatalogProductRowLite>();
 
       for (const p of data) {
@@ -136,10 +140,11 @@ export function useCatalogForImport() {
       }
 
       for (const [key, p] of bestByNorm) {
-        bySlug.set(key, {
+        const entry: BySlugEntry = {
           id: p.id,
           name: p.name,
           unit: p.unit,
+          slug: p.slug,
           barcode: p.barcode,
           unit_2: p.unit_2 || null,
           barcode_2: p.barcode_2 || null,
@@ -148,10 +153,16 @@ export function useCatalogForImport() {
           is_new: !!p.is_new,
           is_locked: !!p.is_locked,
           is_out_stock: !!p.is_out_stock,
-        });
+          category_group: p.category_group || null,
+        };
+        bySlug.set(key, entry);
+        for (const code of [p.barcode, p.barcode_2]) {
+          const bk = normalizeOrderCodeText(code || "");
+          if (bk && !byBarcode.has(bk)) byBarcode.set(bk, entry);
+        }
       }
 
-      return { products: data, bySlug };
+      return { products: data, bySlug, byBarcode };
     },
     staleTime: 1000 * 60 * 5,
   });
@@ -291,6 +302,7 @@ async function ensureProducts(
           unit2Ratio: line.unit2Ratio ?? null,
         });
       } else if (parsed.mode === "stockQ7") {
+        if (parsed.layout === "misaSummary") continue;
         if (line.maVach || line.tenHang) {
           toUpdate.push({
             id: existingId,
@@ -491,27 +503,39 @@ async function upsertStockOnHand(
   parsed: ParsedCatalogStockImport,
   warehouseId: string,
   slugToId: Map<string, string>,
+  warehouseIdByCode?: Map<string, string>,
 ): Promise<{ upserted: number }> {
-  /** Key = productId + unit_key — cùng mã khác ĐVT giữ riêng (GAS MH:|DV:) */
+  /** Key = warehouse + productId + unit_key */
   const byProductUnit = new Map<
     string,
-    { product_id: string; unit: string; unit_key: string; quantity: number }
+    {
+      warehouse_id: string;
+      product_id: string;
+      unit: string;
+      unit_key: string;
+      quantity: number;
+    }
   >();
+  const replaceQty = parsed.layout === "misaSummary";
 
   for (const line of parsed.lines) {
     if (line.errorNote || line.tonKho == null || line.tonKho < 0) continue;
     const pid = slugToId.get(normalizeOrderCodeText(line.productSlug));
     if (!pid) continue;
+    const whId =
+      (line.warehouseCode && warehouseIdByCode?.get(line.warehouseCode)) ||
+      warehouseId;
+    if (!whId) continue;
     const unit = displayStockUnit(line.dvt);
     const unit_key = toStockUnitKey(unit);
-    const mapKey = `${pid}::${unit_key}`;
-    // Gộp chỉ khi trùng cả mã + ĐVT (cộng dồn như GAS addStockValueByCode)
+    const mapKey = `${whId}::${pid}::${unit_key}`;
     const prev = byProductUnit.get(mapKey);
     const qty = Math.max(0, Math.round(line.tonKho));
     if (prev) {
-      prev.quantity = Math.max(0, prev.quantity + qty);
+      prev.quantity = replaceQty ? qty : Math.max(0, prev.quantity + qty);
     } else {
       byProductUnit.set(mapKey, {
+        warehouse_id: whId,
         product_id: pid,
         unit,
         unit_key,
@@ -520,13 +544,7 @@ async function upsertStockOnHand(
     }
   }
 
-  const rows = [...byProductUnit.values()].map((r) => ({
-    warehouse_id: warehouseId,
-    product_id: r.product_id,
-    unit: r.unit,
-    unit_key: r.unit_key,
-    quantity: r.quantity,
-  }));
+  const rows = [...byProductUnit.values()];
 
   if (!rows.length) {
     throw new Error("Không có dòng tồn hợp lệ để ghi stock_on_hand.");
@@ -545,7 +563,7 @@ async function upsertStockOnHand(
     if (error && /unit_key|no unique|ON CONFLICT/i.test(error.message || "")) {
       const collapsed = new Map<string, (typeof slice)[0]>();
       for (const r of slice) {
-        collapsed.set(r.product_id, {
+        collapsed.set(`${r.warehouse_id}::${r.product_id}`, {
           warehouse_id: r.warehouse_id,
           product_id: r.product_id,
           quantity: r.quantity,
@@ -574,15 +592,26 @@ async function upsertStockOnHand(
   }
 
   // Đồng bộ products.stock_quantity (Q7): tổng mọi ĐVT của mã (fallback ecommerce)
-  const { data: wh } = await supabase
-    .from("warehouses" as never)
-    .select("code")
-    .eq("id", warehouseId)
-    .maybeSingle();
+  const q7Id =
+    [...(warehouseIdByCode?.entries() || [])].find(([code]) => code === "Q7")?.[1] ||
+    null;
+  const { data: wh } = q7Id
+    ? { data: { code: "Q7", id: q7Id } }
+    : await supabase
+        .from("warehouses" as never)
+        .select("id, code")
+        .eq("id", warehouseId)
+        .maybeSingle();
 
-  if ((wh as { code: string } | null)?.code === "Q7") {
+  const q7WarehouseId =
+    (wh as { code?: string; id?: string } | null)?.code === "Q7"
+      ? (wh as { id: string }).id || warehouseId
+      : q7Id;
+
+  if (q7WarehouseId) {
     const sumByProduct = new Map<string, number>();
     for (const r of rows) {
+      if (r.warehouse_id !== q7WarehouseId) continue;
       sumByProduct.set(
         r.product_id,
         (sumByProduct.get(r.product_id) || 0) + r.quantity,
@@ -632,8 +661,23 @@ export function useCommitCatalogStockImport() {
 
       let stockUpserted = 0;
       if (parsed.mode === "stockQ7") {
-        if (!warehouseId) throw new Error("Chưa chọn kho để ghi tồn.");
-        const stock = await upsertStockOnHand(parsed, warehouseId, slugToId);
+        if (!warehouseId && parsed.layout !== "misaSummary") {
+          throw new Error("Chưa chọn kho để ghi tồn.");
+        }
+        const { data: whs, error: whErr } = await supabase
+          .from("warehouses" as never)
+          .select("id, code");
+        if (whErr) throw new Error(`Không tải danh sách kho: ${whErr.message}`);
+        const warehouseIdByCode = new Map<string, string>();
+        for (const w of (whs as { id: string; code: string }[] | null) || []) {
+          if (w.code) warehouseIdByCode.set(w.code, w.id);
+        }
+        const stock = await upsertStockOnHand(
+          parsed,
+          warehouseId,
+          slugToId,
+          warehouseIdByCode,
+        );
         stockUpserted = stock.upserted;
       }
 
@@ -647,6 +691,8 @@ export function useCommitCatalogStockImport() {
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["catalog-for-stock-import"] }),
+        queryClient.invalidateQueries({ queryKey: ["shared-products-list"] }),
+        queryClient.invalidateQueries({ queryKey: ["shared-products-list", "sku-groups"] }),
         queryClient.invalidateQueries({ queryKey: ["import-catalog-stock"] }),
         queryClient.invalidateQueries({ queryKey: ["stock-on-hand"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] }),

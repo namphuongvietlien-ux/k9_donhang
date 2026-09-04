@@ -10,8 +10,9 @@ const AdminCatalogStockImport = () => {
         <div>
           <h1 className="text-3xl font-bold">Import danh mục &amp; tồn kho</h1>
           <p className="text-muted-foreground mt-1">
-            Thay Google Sheets: nhập khẩu thông tin SP và file tồn (TON_Q7) như
-            Apps Script.
+            Thay Google Sheets: mỗi ngày kéo file{" "}
+            <strong>TỔNG HỢP TỒN KHO</strong> (MISA) — cột Cuối kỳ theo từng
+            Cửa hàng. Có thể nhập khẩu danh mục riêng.
           </p>
         </div>
         <CatalogStockImport />

@@ -24,6 +24,8 @@ export interface StockOnHandRow {
   productUnit2: string | null;
   warehouseId: string;
   source: "stock_on_hand" | "products";
+  /** stock_on_hand.updated_at — null nếu dòng filler từ products */
+  updatedAt?: string | null;
 }
 
 const PAGE = 1000;
@@ -61,6 +63,7 @@ type FlatStock = {
   warehouse_id: string;
   unit?: string | null;
   unit_key?: string | null;
+  updated_at?: string | null;
 };
 
 type NestedStock = {
@@ -69,6 +72,7 @@ type NestedStock = {
   warehouse_id: string;
   unit?: string | null;
   unit_key?: string | null;
+  updated_at?: string | null;
   products: ProductLite | ProductLite[] | null;
 };
 
@@ -101,7 +105,7 @@ async function fetchAllStockOnHandFlat(
     const to = from + PAGE - 1;
     const withUnit = await supabase
       .from("stock_on_hand" as never)
-      .select("product_id, quantity, warehouse_id, unit, unit_key")
+      .select("product_id, quantity, warehouse_id, unit, unit_key, updated_at")
       .eq("warehouse_id", warehouseId)
       .order("product_id", { ascending: true })
       .order("id", { ascending: true })
@@ -146,6 +150,7 @@ async function fetchAllStockOnHandNested(
           warehouse_id,
           unit,
           unit_key,
+          updated_at,
           products:product_id (
             id, name, slug, unit, unit_2, barcode, barcode_2, stock_quantity
           )
@@ -165,6 +170,7 @@ async function fetchAllStockOnHandNested(
             product_id,
             quantity,
             warehouse_id,
+            updated_at,
             products:product_id ( id, name, slug, unit, barcode )
           `,
         )
@@ -190,6 +196,7 @@ async function fetchAllStockOnHandNested(
           productUnit2: null,
           warehouseId: r.warehouse_id,
           source: "stock_on_hand",
+          updatedAt: r.updated_at || null,
         });
       }
       if (chunk.length < PAGE) break;
@@ -214,6 +221,7 @@ async function fetchAllStockOnHandNested(
         productUnit2: p?.unit_2 ?? null,
         warehouseId: r.warehouse_id,
         source: "stock_on_hand",
+        updatedAt: r.updated_at || null,
       });
     }
     if (chunk.length < PAGE) break;
@@ -239,6 +247,7 @@ function fetchProductStockFallback(products: ProductLite[]): StockOnHandRow[] {
         productUnit2: p.unit_2 || null,
         warehouseId: "",
         source: "products" as const,
+        updatedAt: null,
       };
     });
 }
@@ -270,6 +279,7 @@ async function loadStockForWarehouse(
           productUnit2: p?.unit_2 ?? null,
           warehouseId: r.warehouse_id,
           source: "stock_on_hand" as const,
+          updatedAt: r.updated_at || null,
         };
       });
     }
@@ -536,6 +546,15 @@ export function useStock(warehouseId?: string | null, enabled = true) {
     [query.data],
   );
 
+  const latestUpdatedAt = useMemo(() => {
+    let max: string | null = null;
+    for (const r of query.data ?? []) {
+      if (r.source !== "stock_on_hand" || !r.updatedAt) continue;
+      if (!max || r.updatedAt > max) max = r.updatedAt;
+    }
+    return max;
+  }, [query.data]);
+
   return {
     rows: query.data ?? [],
     bySlug: index.byComposite,
@@ -547,6 +566,7 @@ export function useStock(warehouseId?: string | null, enabled = true) {
     refetch: query.refetch,
     count: query.data?.length ?? 0,
     sohCount,
+    latestUpdatedAt,
   };
 }
 

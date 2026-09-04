@@ -15,6 +15,11 @@ import {
   filterCatalogSuggestions,
   type CatalogSearchItem,
 } from "@/lib/catalogSearch";
+import { checkCatalogAddBlocked } from "@/lib/catalogAddGuards";
+import {
+  isServiceCatalogItem,
+  isVisibleSellableCatalog,
+} from "@/lib/productCategory";
 import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import { openWeeklyBranchPrintWindow, type WeeklyBranchSheet } from "@/lib/internalDispatchPrint";
 import { ProductSearchInput } from "@/components/admin/ProductSearchInput";
@@ -534,7 +539,14 @@ export default function InternalDispatchWorkspace() {
     }, onSuccess: refresh, onError: (error: Error) => toast({ title: "Không thể cập nhật trạng thái in", description: error.message, variant: "destructive" }),
   });
 
-  const availableProducts = useMemo(() => products.filter((product) => product.is_active !== false && product.slug), [products]);
+  const availableProducts = useMemo(
+    () =>
+      products.filter(
+        (product) =>
+          isVisibleSellableCatalog(product) && !isServiceCatalogItem(product),
+      ),
+    [products],
+  );
   const productSuggestions = useMemo(
     () => filterCatalogSuggestions(availableProducts as unknown as CatalogSearchItem[], productSearch, 12),
     [availableProducts, productSearch],
@@ -576,6 +588,15 @@ export default function InternalDispatchWorkspace() {
   const addProduct = () => {
     const product = availableProducts.find((item) => item.id === selectedProduct);
     if (!product) return;
+    const block = checkCatalogAddBlocked(product);
+    if (block.blocked) {
+      toast({
+        title: block.title,
+        description: block.description || undefined,
+        variant: "destructive",
+      });
+      return;
+    }
     const productCode = product.slug || product.barcode || product.id;
     const unit = product.unit || product.unit_name || null;
     setLines((current) => {

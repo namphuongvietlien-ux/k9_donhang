@@ -61,6 +61,15 @@ function toCsv(headers: string[], rows: string[][]): string {
 }
 
 export function downloadImportTemplate(kind: TemplateKind) {
+  if (kind === "stockQ7") {
+    const a = document.createElement("a");
+    a.href = "/mau-tong-hop-ton-kho.xlsx";
+    a.download = "TONG_HOP_TON_KHO.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    return;
+  }
   const t = TEMPLATES[kind];
   const blob = new Blob([toCsv(t.headers, t.sampleRows)], {
     type: "text/csv;charset=utf-8;",
@@ -78,7 +87,7 @@ export function downloadImportTemplate(kind: TemplateKind) {
 export function getTemplateLabel(kind: TemplateKind): string {
   switch (kind) {
     case "stockQ7":
-      return "Mẫu file tồn kho";
+      return "Mẫu TỔNG HỢP TỒN KHO";
     case "catalogFast":
       return "Mẫu file nhập khẩu danh mục";
     case "orderDhDc":

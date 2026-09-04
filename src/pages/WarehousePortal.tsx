@@ -8,11 +8,14 @@ import {
   Loader2,
   LogOut,
   Package,
+  PackageSearch,
   ArrowRightLeft,
   PenLine,
   Settings,
   Users,
 } from "lucide-react";
+import { usePermissions } from "@/hooks/usePermissions";
+import StockBrowsePanel from "@/components/admin/StockBrowsePanel";
 import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import { useAuth } from "@/contexts/AuthContext";
 import { useStoreScope } from "@/hooks/useStoreScope";
@@ -79,6 +82,7 @@ import { vi } from "date-fns/locale";
 
 type AppTab =
   | "create"
+  | "stock"
   | "dashboard"
   | "manage"
   | "receive"
@@ -89,6 +93,7 @@ type AppTab =
 
 const NAV: { id: AppTab; label: string; icon: typeof PenLine }[] = [
   { id: "create", label: "Tạo Đơn", icon: PenLine },
+  { id: "stock", label: "Tồn kho", icon: PackageSearch },
   { id: "xb", label: "Hóa Đơn Dịch Vụ", icon: FileSpreadsheet },
   { id: "dashboard", label: "Tổng Quan", icon: LayoutDashboard },
   { id: "manage", label: "Quản Lý", icon: ClipboardList },
@@ -453,6 +458,9 @@ function DashboardLite() {
             <b>Tạo Đơn</b> — đặt hàng / điều chuyển nội bộ (theo đợt chính / bổ sung).
           </div>
           <div>
+            <b>Tồn kho</b> — xem tồn kho mình + Q7, theo nhóm SKU hoặc tên hàng.
+          </div>
+          <div>
             <b>Quản Lý</b> — tra cứu, sửa, soạn.
           </div>
           <div>
@@ -473,6 +481,8 @@ function DashboardLite() {
  */
 export default function WarehousePortal() {
   const { user, loading, isAdmin, role, signOut } = useAuth();
+  const { hasPermission } = usePermissions();
+  const canViewStock = hasPermission("inventory.view");
   const { warehouseLabel, isStoreScoped, username } = useStoreScope();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabFromUrl = searchParams.get("tab");
@@ -480,6 +490,7 @@ export default function WarehousePortal() {
     if (tabFromUrl === "xb" || tabFromUrl === "bankem") return "xb";
     if (
       tabFromUrl === "create" ||
+      tabFromUrl === "stock" ||
       tabFromUrl === "dashboard" ||
       tabFromUrl === "manage" ||
       tabFromUrl === "receive" ||
@@ -499,6 +510,7 @@ export default function WarehousePortal() {
     if (tabFromUrl === "xb" || tabFromUrl === "bankem") setTab("xb");
     else if (
       tabFromUrl === "create" ||
+      tabFromUrl === "stock" ||
       tabFromUrl === "dashboard" ||
       tabFromUrl === "manage" ||
       tabFromUrl === "receive" ||
@@ -525,22 +537,25 @@ export default function WarehousePortal() {
 
   const visibleNav = useMemo(
     () =>
-      // Tab Quản trị (danh mục) chỉ cho quản lý / quản trị viên — chi nhánh không thấy
-      NAV.filter(
-        (item) =>
-          item.id !== "admin" ||
-          role === "super_admin" ||
-          role === "manager",
-      ),
-    [role],
+      NAV.filter((item) => {
+        if (item.id === "admin") {
+          return role === "super_admin" || role === "manager";
+        }
+        if (item.id === "stock") return canViewStock;
+        return true;
+      }),
+    [role, canViewStock],
   );
 
   useEffect(() => {
     if (tab === "admin" && role === "staff") {
       selectTab("create");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- chỉ khi role/tab admin lệch quyền
-  }, [role, tab]);
+    if (tab === "stock" && !canViewStock) {
+      selectTab("create");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- chỉ khi role/tab lệch quyền
+  }, [role, tab, canViewStock]);
 
   if (loading) {
     return (
@@ -684,6 +699,19 @@ export default function WarehousePortal() {
                 </Card>
               </TabsContent>
             </Tabs>
+          </div>
+        )}
+
+        {tab === "stock" && (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold">Tồn kho</h2>
+              <p className="text-sm text-muted-foreground">
+                Chi nhánh xem kho mình và kho Q7. Lọc theo nhóm SKU 10 ký tự
+                hoặc theo tên / mã hàng.
+              </p>
+            </div>
+            <StockBrowsePanel />
           </div>
         )}
 

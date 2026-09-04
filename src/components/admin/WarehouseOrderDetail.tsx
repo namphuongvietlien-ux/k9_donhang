@@ -64,6 +64,10 @@ import {
 import { filterCatalogSuggestions, resolveCatalogScan } from "@/lib/catalogSearch";
 import { checkCatalogAddBlocked } from "@/lib/catalogAddGuards";
 import {
+  isServiceCatalogItem,
+  isVisibleSellableCatalog,
+} from "@/lib/productCategory";
+import {
   CatalogSuggestItem,
   CatalogSuggestList,
 } from "@/components/admin/CatalogSuggestDropdown";
@@ -142,6 +146,7 @@ type CatalogHit = {
   is_new?: boolean;
   is_locked?: boolean;
   is_out_stock?: boolean;
+  category_group?: string | null;
 };
 
 interface WarehouseOrderDetailProps {
@@ -241,7 +246,7 @@ export default function WarehouseOrderDetail({
   const catalogList = useMemo((): CatalogHit[] => {
     const rows = Array.isArray(sharedProducts) ? sharedProducts : [];
     return rows
-      .filter((p) => p.is_active !== false && p.slug)
+      .filter((p) => isVisibleSellableCatalog(p))
       .map((p) => ({
         id: p.id,
         name: p.name,
@@ -257,6 +262,7 @@ export default function WarehouseOrderDetail({
         is_new: !!p.is_new,
         is_locked: !!p.is_locked,
         is_out_stock: !!p.is_out_stock,
+        category_group: p.category_group || null,
       }));
   }, [sharedProducts]);
 
@@ -303,7 +309,12 @@ export default function WarehouseOrderDetail({
 
   // Mã vạch chỉ khớp exact/prefix — quy tắc nằm trong filterCatalogSuggestions.
   const suggestions = useMemo(
-    () => filterCatalogSuggestions(catalogList, scan, 12),
+    () =>
+      filterCatalogSuggestions(
+        catalogList.filter((p) => !isServiceCatalogItem(p)),
+        scan,
+        12,
+      ),
     [scan, catalogList],
   );
 

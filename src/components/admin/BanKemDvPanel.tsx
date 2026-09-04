@@ -56,6 +56,12 @@ import {
 } from "@/lib/catalogSearch";
 import { checkCatalogAddBlocked } from "@/lib/catalogAddGuards";
 import {
+  isMedicineCategory,
+  isServiceCatalogItem,
+  SERVICE_PICK_MEDICINE_DESC,
+  SERVICE_PICK_MEDICINE_TITLE,
+} from "@/lib/productCategory";
+import {
   CatalogSuggestItem,
   CatalogSuggestList,
 } from "@/components/admin/CatalogSuggestDropdown";
@@ -131,6 +137,7 @@ interface CatalogHit {
   is_locked?: boolean;
   is_out_stock?: boolean;
   is_new?: boolean;
+  category_group?: string | null;
 }
 
 function lineAmount(l: CartLine): number {
@@ -294,6 +301,7 @@ export default function BanKemDvPanel() {
       is_locked?: boolean;
       is_out_stock?: boolean;
       is_new?: boolean;
+      category_group?: string | null;
     })[];
     return rows
       .filter((p) => p.slug)
@@ -310,6 +318,7 @@ export default function BanKemDvPanel() {
         is_locked: !!p.is_locked,
         is_out_stock: !!p.is_out_stock,
         is_new: !!p.is_new,
+        category_group: p.category_group || null,
       }));
   }, [catalog]);
 
@@ -320,7 +329,11 @@ export default function BanKemDvPanel() {
 
   const suggestions = useMemo(() => {
     if (!invoiceLocked) return [];
-    return filterCatalogSuggestions(catalogList, scan, 12);
+    return filterCatalogSuggestions(
+      catalogList.filter((p) => !isServiceCatalogItem(p)),
+      scan,
+      12,
+    );
   }, [scan, catalogList, invoiceLocked]);
 
   /** Mã hàng thắng mã vạch; mã vạch dùng chung nhiều mã hàng → bắt chọn tay */
@@ -408,13 +421,22 @@ export default function BanKemDvPanel() {
       unitOpts[0];
     const dvt = picked?.unit || p.unit || "cái";
     const ma = normalizeOrderCodeText(p.slug);
-    const kind: SalesLineKind = isSalesServiceLine({
+    const looksService = isSalesServiceLine({
       productSlug: p.slug,
       productName: p.name,
       unit: dvt,
-    })
-      ? "DV"
-      : "HANG";
+    });
+    if (looksService && !isMedicineCategory(p.category_group)) {
+      toast({
+        title: SERVICE_PICK_MEDICINE_TITLE,
+        description: SERVICE_PICK_MEDICINE_DESC,
+        variant: "destructive",
+      });
+      setScan("");
+      scanRef.current?.focus();
+      return;
+    }
+    const kind: SalesLineKind = "HANG";
     const price = picked?.price || p.price || 0;
 
     setLines((prev) => {
@@ -512,6 +534,22 @@ export default function BanKemDvPanel() {
   };
 
   const setLineKind = (key: string, kind: SalesLineKind) => {
+    if (kind === "DV") {
+      const line = lines.find((l) => l.key === key);
+      const hit = catalogList.find(
+        (p) =>
+          normalizeOrderCodeText(p.slug) ===
+          normalizeOrderCodeText(line?.maHang || ""),
+      );
+      if (!isMedicineCategory(hit?.category_group)) {
+        toast({
+          title: SERVICE_PICK_MEDICINE_TITLE,
+          description: SERVICE_PICK_MEDICINE_DESC,
+          variant: "destructive",
+        });
+        return;
+      }
+    }
     setLines((prev) =>
       prev.map((l) => {
         if (l.key !== key) return l;

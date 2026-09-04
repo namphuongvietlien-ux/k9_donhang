@@ -119,3 +119,49 @@ export function warehouseShortLabel(
   if (raw === "Q4_275") return "Q4 Mới";
   return raw;
 }
+
+function foldStoreKey(value?: string | null): string {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+/** Tên dòng con trên file MISA TỔNG HỢP TỒN KHO (không phải tên SP). */
+export function isMisaWarehouseRowName(name?: string | null): boolean {
+  const n = foldStoreKey(name);
+  if (!n) return false;
+  if (n.startsWith("khodiadiem") || n.startsWith("diadiemkinhdoanh")) return true;
+  if (n.startsWith("khoq") && n.length <= 8) return true;
+  return n in STORE_DISPLAY_LABELS || n.startsWith("tongcongty");
+}
+
+/**
+ * Map cột "Cửa hàng" / "Kho Địa điểm kinh doanh …" → warehouses.code.
+ * "Tổng công ty" và chuỗi không nhận ra → null (bỏ, không ghi tồn).
+ */
+export function resolveMisaStoreCode(raw?: string | null): string | null {
+  const n = foldStoreKey(raw);
+  if (!n || n.includes("tongcong")) return null;
+
+  if (n.includes("q4m") || n.includes("q4moi") || n.includes("vinhhoi")) return "Q4_275";
+  if (n.includes("q4c") || n.includes("q4cu")) return "Q4_178";
+  if (n.includes("dbt") || n.includes("duongbatrac")) return "Q8";
+  if (n.includes("phamhung") || n.includes("kinhdoanh03") || n.endsWith("ph")) {
+    return "PH";
+  }
+  if (n.includes("kinhdoanhq7") || n.includes("levanluong") || n.endsWith("q7")) {
+    return "Q7";
+  }
+  if (n.includes("kinhdoanh01")) return "Q4_275";
+  if (n.includes("kinhdoanh02")) return "Q8";
+  if (n.includes("kinhdoanh04") || n.includes("q5")) return "Q5";
+  if (n.includes("kinhdoanh05") || n.includes("q1")) return "Q1";
+  if (n.includes("kinhdoanh06")) return "Q4_178";
+  if (n.includes("q8")) return "Q8";
+  if (n.includes("q7")) return "Q7";
+  return null;
+}

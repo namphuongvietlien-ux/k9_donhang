@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Loader2, Sparkles } from "lucide-react";
 import { type NewProductCard } from "@/hooks/useCatalogFlags";
 import { useProducts, type Product } from "@/hooks/useProducts";
+import { isServiceCatalogItem, isVisibleSellableCatalog } from "@/lib/productCategory";
 import { normalizeOrderCodeText } from "@/lib/packingWindows";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,7 +26,12 @@ export default function NewProductsStrip({
   const { products, loading: isLoading, error } = useProducts();
   const items = useMemo<NewProductCard[]>(() => {
     const visible = (products as Product[])
-      .filter((p) => p.is_active !== false && p.is_out_stock !== true)
+      .filter(
+        (p) =>
+          isVisibleSellableCatalog(p) &&
+          p.is_out_stock !== true &&
+          !isServiceCatalogItem(p),
+      )
       .sort((a, b) => {
         const aNew = a.is_new ? 1 : 0;
         const bNew = b.is_new ? 1 : 0;

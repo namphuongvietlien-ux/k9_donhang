@@ -18,8 +18,20 @@ import {
 } from "@/lib/importMapping";
 import { generateSlug } from "@/lib/slug";
 import { normalizeOrderCodeText } from "@/lib/packingWindows";
+import {
+  isMisaWarehouseRowName,
+  resolveMisaStoreCode,
+} from "@/lib/warehouseMeta";
 
 export type CatalogStockImportMode = "catalogFast" | "stockQ7";
+export type CatalogStockLayout = "flat" | "misaSummary";
+
+export interface CatalogExistingRef {
+  id: string;
+  name: string;
+  unit: string | null;
+  slug?: string | null;
+}
 
 export interface CatalogStockLine {
   rowIndex: number;
@@ -33,6 +45,8 @@ export interface CatalogStockLine {
   tyLeQuyDoi: number | null;
   tonKho: number | null;
   khoRaw: string;
+  /** warehouses.code khi đọc được cột Cửa hàng (file TỔNG HỢP TỒN KHO) */
+  warehouseCode: string | null;
   productSlug: string;
   errorNote: string;
   willCreate: boolean;
@@ -40,6 +54,7 @@ export interface CatalogStockLine {
 
 export interface ParsedCatalogStockImport {
   mode: CatalogStockImportMode;
+  layout: CatalogStockLayout;
   headerIndex: number;
   columns: ImportColumnMap;
   khoCol: number;
@@ -49,6 +64,9 @@ export interface ParsedCatalogStockImport {
   withStockCount: number;
   skippedJunk: number;
   skippedEmpty: number;
+  skippedTotals: number;
+  skippedUnknownStore: number;
+  warehouseCounts: Record<string, number>;
 }
 
 function cell(row: unknown[], idx: number): unknown {
@@ -130,8 +148,42 @@ export function slugFromMaHang(maHang: string, tenHang: string): string {
 
 export interface ParseCatalogStockOptions {
   mode: CatalogStockImportMode;
-  /** Existing product slug → id (normalized keys) */
-  existingBySlug: Map<string, { id: string; name: string; unit: string | null }>;
+  /** slug / barcode đã chuẩn hoá → SP */
+  existingBySlug: Map<string, CatalogExistingRef>;
+  existingByBarcode?: Map<string, CatalogExistingRef>;
+  /** Chi nhánh chỉ được ghi các kho này; null = tất cả */
+  allowedWarehouseCodes?: string[] | null;
+}
+
+function lookupExisting(
+  code: string,
+  options: ParseCatalogStockOptions,
+): CatalogExistingRef | undefined {
+  const key = normalizeOrderCodeText(code);
+  if (!key) return undefined;
+  return (
+    options.existingBySlug.get(key) ||
+    options.existingByBarcode?.get(key)
+  );
+}
+
+function detectMisaSummaryLayout(
+  headerRow: unknown[],
+  columns: ImportColumnMap,
+  khoCol: number,
+): boolean {
+  const blob = (headerRow || []).map((c) => normalizeHeaderText(c)).join(" ");
+  if (blob.includes("cuoiky") && (blob.includes("cuahang") || blob.includes("nhapkho"))) {
+    return true;
+  }
+  if (columns.tonKho < 0 || khoCol < 0) return false;
+  const tonNorm = normalizeHeaderText(headerRow[columns.tonKho]);
+  const khoNorm = normalizeHeaderText(headerRow[khoCol]);
+  return tonNorm.includes("cuoiky") && (khoNorm.includes("cuahang") || khoNorm === "kho");
+}
+
+function isMisaSubheaderCode(code: string): boolean {
+  return /^\(\d+\)$/.test(code.trim());
 }
 
 export function parseCatalogStockMatrix(
@@ -144,6 +196,13 @@ export function parseCatalogStockMatrix(
   const khoCol = findKhoColumn(matrix[headerIndex] || []);
   const priceCol = findPriceColumn(matrix[headerIndex] || []);
   const ratioCol = findRatioColumn(matrix[headerIndex] || []);
+  const layout: CatalogStockLayout = detectMisaSummaryLayout(
+    matrix[headerIndex] || [],
+    columns,
+    khoCol,
+  )
+    ? "misaSummary"
+    : "flat";
 
   if (columns.maHang < 0 && columns.maVach < 0) {
     throw new Error("Không tìm thấy cột Mã hàng / Mã vạch (như file nhập khẩu GAS).");
@@ -153,16 +212,24 @@ export function parseCatalogStockMatrix(
     const tonCol = columns.tonKho >= 0 ? columns.tonKho : columns.soLuong;
     if (tonCol < 0) {
       throw new Error(
-        "File tồn kho thiếu cột Tồn kho / Số lượng (TON_Q7). Kiểm tra tiêu đề cột.",
+        "File tồn kho thiếu cột Tồn kho / Số lượng / Cuối kỳ. Kiểm tra tiêu đề cột.",
       );
     }
   }
 
+  const allowed = options.allowedWarehouseCodes?.length
+    ? new Set(options.allowedWarehouseCodes.map((c) => c.trim().toUpperCase()))
+    : null;
+
   const lines: CatalogStockLine[] = [];
   let skippedJunk = 0;
   let skippedEmpty = 0;
+  let skippedTotals = 0;
+  let skippedUnknownStore = 0;
   let newProductCount = 0;
   let withStockCount = 0;
+  const warehouseCounts: Record<string, number> = {};
+  let lastProductName = "";
 
   for (let i = headerIndex + 1; i < matrix.length; i++) {
     const row = matrix[i] || [];
@@ -174,12 +241,12 @@ export function parseCatalogStockMatrix(
     const maHang = normalizeProductCode(cell(row, columns.maHang));
     const maVach = normalizeProductCode(cell(row, columns.maVach));
     const sku = maHang || maVach;
-    if (!sku) {
+    if (!sku || isMisaSubheaderCode(sku)) {
       skippedEmpty++;
       continue;
     }
 
-    const tenHang = String(cell(row, columns.tenHang) ?? "").trim();
+    let tenHang = String(cell(row, columns.tenHang) ?? "").trim();
     const dvt = sanitizeImportDvt(cell(row, columns.dvt));
     const parentSku = normalizeProductCode(cell(row, columns.parentSku));
     const khoRaw = String(cell(row, khoCol) ?? "").trim();
@@ -197,8 +264,58 @@ export function parseCatalogStockMatrix(
       }
     }
 
-    const slug = slugFromMaHang(sku, tenHang || sku);
-    const existing = options.existingBySlug.get(normalizeOrderCodeText(slug));
+    if (layout === "misaSummary") {
+      const storeHint = khoRaw || (isMisaWarehouseRowName(tenHang) ? tenHang : "");
+      const warehouseCode = resolveMisaStoreCode(storeHint);
+      if (!storeHint) {
+        if (tenHang && !isMisaWarehouseRowName(tenHang)) lastProductName = tenHang;
+        skippedTotals++;
+        continue;
+      }
+      if (!warehouseCode) {
+        skippedUnknownStore++;
+        continue;
+      }
+      if (allowed && !allowed.has(warehouseCode)) {
+        skippedUnknownStore++;
+        continue;
+      }
+      if (isMisaWarehouseRowName(tenHang) && lastProductName) {
+        tenHang = lastProductName;
+      } else if (tenHang && !isMisaWarehouseRowName(tenHang)) {
+        lastProductName = tenHang;
+      }
+      warehouseCounts[warehouseCode] = (warehouseCounts[warehouseCode] || 0) + 1;
+
+      const existing = lookupExisting(sku, options);
+      const slug = existing?.slug || slugFromMaHang(sku, tenHang || sku);
+      if (tonKho != null) withStockCount++;
+
+      let errorNote = "";
+      if (tonKho == null || tonKho < 0) errorNote = "Thiếu / lỗi tồn cuối kỳ";
+      else if (!existing) errorNote = "Không khớp mã trong danh mục";
+
+      lines.push({
+        rowIndex: i + 1,
+        maHang: existing?.slug || sku,
+        maVach,
+        tenHang: existing?.name || tenHang || sku,
+        dvt: dvt || existing?.unit || "cái",
+        parentSku,
+        price,
+        tyLeQuyDoi,
+        tonKho,
+        khoRaw: storeHint,
+        warehouseCode,
+        productSlug: slug,
+        errorNote,
+        willCreate: false,
+      });
+      continue;
+    }
+
+    const existing = lookupExisting(sku, options);
+    const slug = existing?.slug || slugFromMaHang(sku, tenHang || sku);
     const willCreate = !existing;
     if (willCreate) newProductCount++;
     if (tonKho != null) withStockCount++;
@@ -222,6 +339,7 @@ export function parseCatalogStockMatrix(
       tyLeQuyDoi,
       tonKho,
       khoRaw,
+      warehouseCode: resolveMisaStoreCode(khoRaw),
       productSlug: slug,
       errorNote,
       willCreate,
@@ -232,6 +350,7 @@ export function parseCatalogStockMatrix(
 
   return {
     mode: options.mode,
+    layout,
     headerIndex,
     columns,
     khoCol,
@@ -241,5 +360,8 @@ export function parseCatalogStockMatrix(
     withStockCount,
     skippedJunk,
     skippedEmpty,
+    skippedTotals,
+    skippedUnknownStore,
+    warehouseCounts,
   };
 }
