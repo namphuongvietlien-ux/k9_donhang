@@ -41,6 +41,8 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
+import { useProductGifts } from "@/hooks/useProductGifts";
+import { attachGiftLines } from "@/lib/productGifts";
 import { cn } from "@/lib/utils";
 
 type WorkspaceView = "request" | "review" | "history";
@@ -64,7 +66,11 @@ type WeeklyDispatchLink = {
   } | null;
 };
 type WeeklyOrder = { id: string; week_start: string; status: string; internal_weekly_items: DispatchItem[]; weekly_order_dispatches?: WeeklyDispatchLink[] };
-type DraftLine = Omit<DispatchItem, "id" | "line_no">;
+type DraftLine = Omit<DispatchItem, "id" | "line_no"> & {
+  is_gift?: boolean;
+  gift_of_code?: string;
+  gift_rule_id?: string | null;
+};
 
 const statusLabel: Record<string, string> = {
   pending_manager: "Chờ quản lý duyệt", manager_approved: "Đã duyệt", manager_rejected: "Từ chối", processed: "Đã xử lý",
@@ -316,6 +322,7 @@ export default function InternalDispatchWorkspace() {
   const { warehouseId, warehouseLabel: scopedWarehouseLabel, role, user } = useAuth();
   const { warehouses } = useWarehouses();
   const { products } = useProducts();
+  const { data: giftRules = [] } = useProductGifts();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [lines, setLines] = useState<DraftLine[]>([]);
@@ -407,7 +414,14 @@ export default function InternalDispatchWorkspace() {
       if (!destWarehouseId) throw new Error("Chọn chi nhánh nhận hàng.");
       const { data, error } = await supabase.rpc("create_internal_dispatch" as never, { _warehouse_id: destWarehouseId, _notes: notes || null, _items: lines } as never);
       if (error) throw error;
-      return data as string;
+      const dispatchId = data as string;
+      const { error: giftErr } = await supabase.rpc("expand_dispatch_gifts" as never, {
+        _dispatch_id: dispatchId,
+      } as never);
+      if (giftErr && !/does not exist|schema cache|PGRST202/i.test(giftErr.message || "")) {
+        console.warn("expand_dispatch_gifts", giftErr.message);
+      }
+      return dispatchId;
     },
     onSuccess: async (dispatchId) => {
       const lineCount = lines.length;
@@ -525,11 +539,71 @@ export default function InternalDispatchWorkspace() {
     () => filterCatalogSuggestions(availableProducts as unknown as CatalogSearchItem[], productSearch, 12),
     [availableProducts, productSearch],
   );
+  const withDispatchGifts = (rows: DraftLine[]): DraftLine[] =>
+    attachGiftLines(rows, giftRules, {
+      isGift: (line) => !!line.is_gift,
+      mainOf: (line) => ({
+        id: line.product_id,
+        slug: line.product_code,
+        quantity: line.quantity,
+      }),
+      makeGift: (main, seed) => ({
+        product_id: seed.giftProductId,
+        product_code: seed.slug,
+        product_name: `${seed.name} (tặng kèm)`,
+        unit: seed.unit,
+        quantity: seed.quantity,
+        notes: "Hàng tặng kèm",
+        is_gift: true,
+        gift_of_code: main.product_code,
+        gift_rule_id: seed.ruleId,
+      }),
+    });
+
+  useEffect(() => {
+    if (!giftRules.length) return;
+    setLines((prev) => {
+      const next = withDispatchGifts(prev);
+      const sig = (rows: DraftLine[]) =>
+        rows
+          .filter((l) => l.is_gift)
+          .map((l) => `${l.product_code}:${l.quantity}`)
+          .join("|");
+      return sig(prev) === sig(next) ? prev : next;
+    });
+  }, [giftRules]);
+
   const addProduct = () => {
     const product = availableProducts.find((item) => item.id === selectedProduct);
     if (!product) return;
     const productCode = product.slug || product.barcode || product.id;
-    setLines((current) => [...current, { product_id: product.id, product_code: productCode, product_name: product.name, unit: product.unit || product.unit_name || null, quantity: 1, notes: null }]);
+    const unit = product.unit || product.unit_name || null;
+    setLines((current) => {
+      const exist = current.find(
+        (item) =>
+          !item.is_gift &&
+          item.product_id === product.id &&
+          (item.unit || "") === (unit || ""),
+      );
+      if (exist) {
+        return withDispatchGifts(
+          current.map((item) =>
+            item === exist ? { ...item, quantity: Number(item.quantity) + 1 } : item,
+          ),
+        );
+      }
+      return withDispatchGifts([
+        ...current,
+        {
+          product_id: product.id,
+          product_code: productCode,
+          product_name: product.name,
+          unit,
+          quantity: 1,
+          notes: null,
+        },
+      ]);
+    });
     setSelectedProduct(""); setProductSearch("");
   };
   const pickProduct = (productId: string) => {
@@ -969,9 +1043,19 @@ export default function InternalDispatchWorkspace() {
                 <TableBody>
                   {lines.length ? (
                     lines.map((line, index) => (
-                      <TableRow key={`${line.product_id}-${index}`}>
+                      <TableRow
+                        key={`${line.product_id}-${line.product_code}-${index}`}
+                        className={line.is_gift ? "bg-rose-50/80" : undefined}
+                      >
                         <TableCell>{index + 1}</TableCell>
-                        <TableCell className="font-mono text-xs">{line.product_code}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {line.product_code}
+                          {line.is_gift ? (
+                            <span className="ml-1 text-[10px] font-semibold text-rose-700">
+                              TẶNG
+                            </span>
+                          ) : null}
+                        </TableCell>
                         <TableCell>{line.product_name}</TableCell>
                         <TableCell>
                           <Input
@@ -980,12 +1064,16 @@ export default function InternalDispatchWorkspace() {
                             min="0.001"
                             step="0.001"
                             value={line.quantity}
+                            disabled={!!line.is_gift}
+                            title={line.is_gift ? "SL tặng theo sản phẩm chính" : undefined}
                             onChange={(event) =>
                               setLines((current) =>
-                                current.map((item, itemIndex) =>
-                                  itemIndex === index
-                                    ? { ...item, quantity: Number(event.target.value) }
-                                    : item,
+                                withDispatchGifts(
+                                  current.map((item, itemIndex) =>
+                                    itemIndex === index
+                                      ? { ...item, quantity: Number(event.target.value) }
+                                      : item,
+                                  ),
                                 ),
                               )
                             }
@@ -998,8 +1086,14 @@ export default function InternalDispatchWorkspace() {
                             size="icon"
                             className="h-8 w-8"
                             aria-label="Xóa dòng"
+                            disabled={!!line.is_gift}
+                            title={line.is_gift ? "Xóa sản phẩm chính để bỏ quà tặng" : "Xóa dòng"}
                             onClick={() =>
-                              setLines((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                              setLines((current) =>
+                                withDispatchGifts(
+                                  current.filter((_, itemIndex) => itemIndex !== index),
+                                ),
+                              )
                             }
                           >
                             <Trash2 className="h-4 w-4" />

@@ -22,6 +22,12 @@ import { useProducts, type Product } from "@/hooks/useProducts";
 
 export { warehouseShortLabel };
 
+function isMissingRpc(message?: string | null) {
+  return /does not exist|schema cache|PGRST202|Could not find the function/i.test(
+    message || "",
+  );
+}
+
 export interface WarehouseOrderItem {
   id: string;
   stt?: number | null;
@@ -35,6 +41,7 @@ export interface WarehouseOrderItem {
   line_notes?: string | null;
   barcode?: string | null;
   unit?: string | null;
+  is_gift?: boolean;
   /** Join products — cờ thị giác GAS */
   is_new?: boolean;
   is_out_stock?: boolean;
@@ -92,7 +99,7 @@ export interface WarehouseOrderFilters {
 }
 
 const ITEM_SELECT =
-  "id, stt, product_name, product_slug, price, quantity, qty_requested, qty_packed, qty_received, line_notes, barcode, unit";
+  "id, stt, product_name, product_slug, price, quantity, qty_requested, qty_packed, qty_received, line_notes, barcode, unit, is_gift";
 
 /** Cơ bản + nhãn Q4 Cũ/Mới — luôn lấy short_name để UI không hiện Q4_275 */
 const ORDER_SELECT = `
@@ -385,11 +392,11 @@ export function useWarehouseOrders(filters: WarehouseOrderFilters = {}) {
       );
 
       const { data, error } = await q;
-      if (error && /short_name|print_name|address/i.test(error.message || "")) {
+      if (error && /short_name|print_name|address|is_gift/i.test(error.message || "")) {
         const q2 = applyWarehouseOrderFilters(
           supabase
             .from("orders")
-            .select(ORDER_SELECT_BASIC)
+            .select(ORDER_SELECT_BASIC.replace(", is_gift", ""))
             .order("created_at", { ascending: false })
             .limit(filters.limit ?? 150),
           filters,
@@ -425,10 +432,10 @@ export function useWarehouseOrder(orderId: string | null) {
         .eq("id", orderId!)
         .single();
 
-      if (error && /short_name|print_name|address/i.test(error.message || "")) {
+      if (error && /short_name|print_name|address|is_gift/i.test(error.message || "")) {
         const retry = await supabase
           .from("orders")
-          .select(ORDER_SELECT_BASIC)
+          .select(ORDER_SELECT_BASIC.replace(", is_gift", ""))
           .eq("id", orderId!)
           .single();
         data = retry.data;
@@ -477,6 +484,8 @@ export type SaveOrderInput = {
     unit?: string | null;
     /** Có sẵn từ catalog; mã ngoài để null → auto-upsert */
     productId?: string | null;
+    isGift?: boolean;
+    giftRuleId?: string | null;
   }[];
 };
 
@@ -575,6 +584,7 @@ export function useWarehouseOrderMutations() {
       const skuQty: Record<string, number> = {};
       let totalQty = 0;
       for (const l of valid) {
+        if (l.isGift) continue;
         totalQty += l.quantity;
         const k = normalizeOrderCodeText(l.productSlug || l.productName);
         if (k) skuQty[k] = (skuQty[k] || 0) + l.quantity;
@@ -634,13 +644,14 @@ export function useWarehouseOrderMutations() {
       const items = valid.map((l, index) => {
         const slug = normalizeOrderCodeText(l.productSlug || "");
         const pid = productIds.get(slug) || l.productId || null;
+        const isGift = !!l.isGift;
         return {
           order_id: orderId,
           stt: nextStt + index,
           product_name: l.productName,
           product_slug: l.productSlug,
           product_image: null,
-          price: l.price || 0,
+          price: isGift ? 0 : l.price || 0,
           quantity: l.quantity,
           qty_requested: l.quantity,
           qty_packed: null,
@@ -648,40 +659,71 @@ export function useWarehouseOrderMutations() {
           shipping_fee: 0,
           barcode: l.barcode || null,
           unit: l.unit || null,
+          is_gift: isGift,
+          line_notes: isGift ? "Hàng tặng kèm" : null,
+          ...(isGift && l.giftRuleId ? { gift_rule_id: l.giftRuleId } : {}),
           ...(pid ? { product_id: pid } : {}),
         };
       });
 
-      const { error: itemsErr } = await supabase
-        .from("order_items")
-        .insert(items as never);
+      const insertItems = async (rows: typeof items) =>
+        supabase.from("order_items").insert(rows as never);
+
+      let { error: itemsErr } = await insertItems(items);
+      if (itemsErr && /is_gift|gift_of|gift_rule_id/i.test(itemsErr.message || "")) {
+        const stripped = items.map((row) => {
+          const { is_gift: _g, gift_rule_id: _r, ...rest } = row as typeof row & {
+            is_gift?: boolean;
+            gift_rule_id?: string;
+          };
+          void _g;
+          void _r;
+          return rest;
+        });
+        const retry = await insertItems(stripped as typeof items);
+        itemsErr = retry.error;
+      }
+      if (itemsErr && /product_id/i.test(itemsErr.message || "")) {
+        const stripped = items.map(({ product_id: _pid, is_gift: _g, ...rest }) => {
+          void _pid;
+          void _g;
+          return rest;
+        });
+        const retry = await insertItems(stripped as typeof items);
+        itemsErr = retry.error;
+      }
       if (itemsErr) {
-        // Fallback: schema chưa có cột product_id
-        if (/product_id/i.test(itemsErr.message || "")) {
-          const stripped = items.map(({ product_id: _pid, ...rest }) => {
-            void _pid;
-            return rest;
-          });
-          const { error: retryErr } = await supabase
-            .from("order_items")
-            .insert(stripped as never);
-          if (retryErr) {
-            await supabase.from("orders").delete().eq("id", orderId);
-            throw new Error(retryErr.message);
-          }
-        } else {
-          await supabase.from("orders").delete().eq("id", orderId);
-          throw new Error(itemsErr.message);
-        }
+        await supabase.from("orders").delete().eq("id", orderId);
+        throw new Error(itemsErr.message);
       }
 
       const { error: finalizeErr } = await supabase.rpc(
         "finalize_warehouse_order" as never,
         { _order_id: orderId } as never,
       );
-      if (finalizeErr && !/does not exist|schema cache|PGRST202/i.test(finalizeErr.message || "")) {
-        await supabase.from("orders").delete().eq("id", orderId);
-        throw new Error(finalizeErr.message);
+      if (finalizeErr) {
+        const { error: giftErr } = await supabase.rpc(
+          "expand_order_gifts" as never,
+          { _order_id: orderId } as never,
+        );
+        const { error: deductErr } = await supabase.rpc(
+          "deduct_order_stock" as never,
+          { _order_id: orderId } as never,
+        );
+        if (deductErr && !isMissingRpc(deductErr.message)) {
+          throw new Error(
+            `Đã lưu phiếu nhưng chưa trừ tồn: ${deductErr.message}`,
+          );
+        }
+        if (
+          giftErr &&
+          !isMissingRpc(giftErr.message) &&
+          deductErr &&
+          !isMissingRpc(deductErr.message) &&
+          !isMissingRpc(finalizeErr.message)
+        ) {
+          throw new Error(finalizeErr.message);
+        }
       }
 
       const code = (order as { order_code: string }).order_code;

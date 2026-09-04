@@ -76,11 +76,15 @@ BEGIN
         p.id, p.slug, p.name, p.unit, p.barcode
       FROM public.product_gifts g
       JOIN public.products p ON p.id = g.gift_product_id
-      WHERE g.main_product_id = COALESCE(
-            v_main.product_id,
-            (SELECT id FROM public.products WHERE slug = v_main.product_slug LIMIT 1)
+      JOIN public.products pm ON pm.id = g.main_product_id
+      WHERE g.is_active
+        AND (
+          (v_main.product_id IS NOT NULL AND g.main_product_id = v_main.product_id)
+          OR (
+            NULLIF(trim(v_main.product_slug), '') IS NOT NULL
+            AND upper(trim(pm.slug)) = upper(trim(v_main.product_slug))
           )
-        AND g.is_active
+        )
     LOOP
       IF EXISTS (
         SELECT 1 FROM public.order_items

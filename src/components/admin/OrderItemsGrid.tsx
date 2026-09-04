@@ -52,6 +52,7 @@ export type OrderGridLine = {
   /** unit_2_ratio catalog — hiển thị cột MOQ (kể cả khi ĐVT lớn → ràng buộc = 1) */
   moq?: number;
   isCustomSku?: boolean;
+  isGift?: boolean;
 };
 
 const vnd = (n: number) =>
@@ -142,10 +143,11 @@ export function OrderItemsGrid({
               const liveOpts = getSkuUnitOptions(skuUnitIndex, l.maHang);
               const unitOpts =
                 liveOpts.length > 0 ? liveOpts : l.unitOptions;
+              const isGift = !!l.isGift;
               const isCustom =
                 !!l.isCustomSku || (!l.productId && !unitOpts.length);
               const hasUnits = unitOpts.length > 0 && !isCustom;
-              const unitLocked = unitOpts.length === 1 && !isCustom;
+              const unitLocked = (unitOpts.length === 1 && !isCustom) || isGift;
               const tonLive =
                 getQty(l.maHang, l.dvt) ??
                 getQty(l.maVach, l.dvt) ??
@@ -165,6 +167,7 @@ export function OrderItemsGrid({
               const moqError =
                 !allowPartial &&
                 !isCustom &&
+                !isGift &&
                 !loi &&
                 moq > 1 &&
                 !isQtyMultipleOfMoq(l.quantity, moq);
@@ -173,9 +176,10 @@ export function OrderItemsGrid({
                   key={l.key}
                   className={cn(
                     excelTr,
+                    isGift && "bg-rose-50/80",
                     moqError && "bg-orange-50",
-                    (loi || isCustom) && !moqError && "bg-emerald-50/70",
-                    !loi && !isCustom && !moqError && idx % 2 === 1 && "bg-slate-50/70",
+                    (loi || isCustom) && !moqError && !isGift && "bg-emerald-50/70",
+                    !loi && !isCustom && !isGift && !moqError && idx % 2 === 1 && "bg-slate-50/70",
                   )}
                 >
                   <TableCell
@@ -197,6 +201,11 @@ export function OrderItemsGrid({
                       }
                     >
                       {normalizeOrderCodeText(l.maHang) || l.maHang}
+                      {isGift ? (
+                        <span className="ml-1 text-[10px] font-semibold text-rose-700">
+                          TẶNG
+                        </span>
+                      ) : null}
                       {isCustom ? (
                         <span className="ml-1 text-[10px] font-semibold text-emerald-700">
                           MỚI
@@ -315,8 +324,15 @@ export function OrderItemsGrid({
                         size="icon"
                         variant="outline"
                         className="h-7 w-7 shrink-0"
+                        disabled={isGift}
                         onClick={() => onQty(l.key, l.quantity - qtyStep)}
-                        title={qtyStep > 1 ? `Giảm ${qtyStep}` : "Giảm 1"}
+                        title={
+                          isGift
+                            ? "SL tặng theo sản phẩm chính"
+                            : qtyStep > 1
+                              ? `Giảm ${qtyStep}`
+                              : "Giảm 1"
+                        }
                       >
                         <Minus className="w-3 h-3" />
                       </Button>
@@ -329,10 +345,13 @@ export function OrderItemsGrid({
                         onValueChange={(v) => onQty(l.key, v)}
                         min={allowPartial ? 1 : moq}
                         step={qtyStep}
+                        disabled={isGift}
                         title={
-                          moqError
-                            ? `SL phải là bội số của MOQ ${moq}`
-                            : undefined
+                          isGift
+                            ? "SL tặng theo sản phẩm chính"
+                            : moqError
+                              ? `SL phải là bội số của MOQ ${moq}`
+                              : undefined
                         }
                       />
                       <Button
@@ -340,8 +359,15 @@ export function OrderItemsGrid({
                         size="icon"
                         variant="outline"
                         className="h-7 w-7 shrink-0"
+                        disabled={isGift}
                         onClick={() => onQty(l.key, l.quantity + qtyStep)}
-                        title={qtyStep > 1 ? `Tăng ${qtyStep}` : "Tăng 1"}
+                        title={
+                          isGift
+                            ? "SL tặng theo sản phẩm chính"
+                            : qtyStep > 1
+                              ? `Tăng ${qtyStep}`
+                              : "Tăng 1"
+                        }
                       >
                         <Plus className="w-3 h-3" />
                       </Button>

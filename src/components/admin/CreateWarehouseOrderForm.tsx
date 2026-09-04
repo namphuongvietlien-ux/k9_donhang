@@ -69,6 +69,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useProductGifts } from "@/hooks/useProductGifts";
+import { attachGiftLines } from "@/lib/productGifts";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
@@ -95,6 +97,9 @@ interface CartLine {
   moq?: number;
   /** SKU gõ tay / không có trong catalog — mở khóa tên/ĐVT/MV */
   isCustomSku?: boolean;
+  isGift?: boolean;
+  giftOfKey?: string;
+  giftRuleId?: string;
 }
 
 type TransferFormDraft = {
@@ -165,6 +170,7 @@ const CreateWarehouseOrderForm = forwardRef<
     useProducts();
   const { data: q7 } = usePackingSourceWarehouse();
   const { createOrder } = useWarehouseOrderMutations();
+  const { data: giftRules = [] } = useProductGifts();
   const { toast } = useToast();
   const scanRef = useRef<HTMLInputElement>(null);
 
@@ -299,6 +305,51 @@ const CreateWarehouseOrderForm = forwardRef<
 
   const skuUnitIndex = useSkuUnitIndex(catalogList as CatalogProductRow[]);
 
+  const withGifts = (rows: CartLine[]): CartLine[] =>
+    attachGiftLines(rows, giftRules, {
+      isGift: (line) => !!line.isGift,
+      mainOf: (line) => ({
+        id: line.productId,
+        slug: line.maHang,
+        quantity: line.quantity,
+      }),
+      makeGift: (main, seed) => {
+        const hit = catalogList.find(
+          (p) =>
+            p.id === seed.giftProductId ||
+            normalizeOrderCodeText(p.slug) === seed.slug,
+        );
+        return {
+          key: `gift-${main.key}-${seed.ruleId}`,
+          maHang: seed.slug,
+          maVach: hit?.barcode || "",
+          tenHang: `${seed.name} (tặng kèm)`,
+          dvt: seed.unit,
+          unitOptions: [],
+          quantity: seed.quantity,
+          productId: seed.giftProductId,
+          price: 0,
+          stockQty: getQty(seed.slug, seed.unit),
+          isGift: true,
+          giftOfKey: main.key,
+          giftRuleId: seed.ruleId,
+        };
+      },
+    });
+
+  useEffect(() => {
+    if (!giftRules.length) return;
+    setLines((prev) => {
+      const next = withGifts(prev);
+      const sig = (rows: CartLine[]) =>
+        rows
+          .filter((l) => l.isGift)
+          .map((l) => `${l.key}:${l.quantity}`)
+          .join("|");
+      return sig(prev) === sig(next) ? prev : next;
+    });
+  }, [giftRules]);
+
   // Lọc mã vạch chặt (exact / prefix) đã nằm trong filterCatalogSuggestions —
   // không vá lại ở tầng form để hai nơi không lệch nhau.
   const suggestions = useMemo(
@@ -375,17 +426,20 @@ const CreateWarehouseOrderForm = forwardRef<
     setLines((prev) => {
       const exist = prev.find(
         (l) =>
+          !l.isGift &&
           normalizeOrderCodeText(l.maHang) === ma &&
           normalizeOrderCodeText(l.dvt) === normalizeOrderCodeText(unit),
       );
       if (exist) {
-        return prev.map((l) =>
-          l.key === exist.key
-            ? { ...l, quantity: l.quantity + moq, moq: catalogMoq }
-            : l,
+        return withGifts(
+          prev.map((l) =>
+            l.key === exist.key
+              ? { ...l, quantity: l.quantity + moq, moq: catalogMoq }
+              : l,
+          ),
         );
       }
-      return [
+      return withGifts([
         {
           key: `${Date.now()}-${ma}-${unit}`,
           maHang: ma,
@@ -400,7 +454,7 @@ const CreateWarehouseOrderForm = forwardRef<
           moq: catalogMoq,
         },
         ...prev,
-      ];
+      ]);
     });
     setScan("");
     scanRef.current?.focus();
@@ -448,11 +502,13 @@ const CreateWarehouseOrderForm = forwardRef<
           normalizeOrderCodeText(l.maHang) === sku,
       );
       if (exist) {
-        return prev.map((l) =>
-          l.key === exist.key ? { ...l, quantity: l.quantity + 1 } : l,
+        return withGifts(
+          prev.map((l) =>
+            l.key === exist.key ? { ...l, quantity: l.quantity + 1 } : l,
+          ),
         );
       }
-      return [
+      return withGifts([
         {
           key: `${Date.now()}-new-${sku}`,
           maHang: sku,
@@ -467,7 +523,7 @@ const CreateWarehouseOrderForm = forwardRef<
           isCustomSku: true,
         },
         ...prev,
-      ];
+      ]);
     });
     setScan("");
     toast({
@@ -503,11 +559,13 @@ const CreateWarehouseOrderForm = forwardRef<
 
   const setQty = (key: string, qty: number) => {
     setLines((prev) =>
-      prev
-        .map((l) =>
-          l.key === key ? { ...l, quantity: Math.max(0, qty) } : l,
-        )
-        .filter((l) => l.quantity > 0),
+      withGifts(
+        prev
+          .map((l) =>
+            l.key === key ? { ...l, quantity: Math.max(0, qty) } : l,
+          )
+          .filter((l) => l.quantity > 0),
+      ),
     );
   };
 
@@ -591,7 +649,7 @@ const CreateWarehouseOrderForm = forwardRef<
       );
     };
     const moqBad = preparedLines.find((l) => {
-      if (l.quantity <= 0 || l.isCustomSku) return false;
+      if (l.quantity <= 0 || l.isCustomSku || l.isGift) return false;
       return !isQtyMultipleOfMoq(l.quantity, lineMoq(l));
     });
     if (moqBad && !allowPartial) {
@@ -618,6 +676,8 @@ const CreateWarehouseOrderForm = forwardRef<
           barcode: l.maVach || null,
           unit: l.dvt || null,
           productId: l.productId,
+          isGift: !!l.isGift,
+          giftRuleId: l.giftRuleId || null,
         })),
       });
       toast({ title: "Đã tạo phiếu", description: res.order_code });
@@ -965,7 +1025,11 @@ const CreateWarehouseOrderForm = forwardRef<
           onBarcode={setLineBarcode}
           onName={setLineName}
           onRemove={(key) =>
-            setLines((prev) => prev.filter((x) => x.key !== key))
+            setLines((prev) =>
+              withGifts(
+                prev.filter((x) => x.key !== key && x.giftOfKey !== key),
+              ),
+            )
           }
         />
 

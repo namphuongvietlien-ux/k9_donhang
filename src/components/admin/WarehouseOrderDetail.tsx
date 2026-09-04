@@ -2125,6 +2125,11 @@ export default function WarehouseOrderDetail({
                       )}
                     >
                       {it.product_name}
+                      {it.is_gift || /tặng kèm/i.test(it.line_notes || "") ? (
+                        <span className="ml-1 text-[10px] font-semibold text-rose-700">
+                          TẶNG
+                        </span>
+                      ) : null}
                     </div>
                   </TableCell>
                   <TableCell className={cn(excelTd, "font-medium text-xs")}>
