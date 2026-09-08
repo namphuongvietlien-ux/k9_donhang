@@ -68,6 +68,12 @@ import {
   isVisibleSellableCatalog,
 } from "@/lib/productCategory";
 import {
+  assertLineFitsOrderKind,
+  isSttLockedOrder,
+  lineFitsOrderKind,
+  notifyOrderKindMixBlocked,
+} from "@/lib/orderKindMix";
+import {
   CatalogSuggestItem,
   CatalogSuggestList,
 } from "@/components/admin/CatalogSuggestDropdown";
@@ -147,6 +153,8 @@ type CatalogHit = {
   is_locked?: boolean;
   is_out_stock?: boolean;
   category_group?: string | null;
+  sku_industry?: string | null;
+  sku_detail?: string | null;
 };
 
 interface WarehouseOrderDetailProps {
@@ -169,6 +177,7 @@ export default function WarehouseOrderDetail({
     updateItemQty,
     updateItemUnit,
     addItem,
+    markOrderPrinted,
     removeItem,
     cancelOrder,
     restoreOrder,
@@ -263,6 +272,8 @@ export default function WarehouseOrderDetail({
         is_locked: !!p.is_locked,
         is_out_stock: !!p.is_out_stock,
         category_group: p.category_group || null,
+        sku_industry: p.sku_industry || null,
+        sku_detail: p.sku_detail || null,
       }));
   }, [sharedProducts]);
 
@@ -311,11 +322,15 @@ export default function WarehouseOrderDetail({
   const suggestions = useMemo(
     () =>
       filterCatalogSuggestions(
-        catalogList.filter((p) => !isServiceCatalogItem(p)),
+        catalogList.filter((p) => {
+          if (isServiceCatalogItem(p)) return false;
+          if (!order) return true;
+          return lineFitsOrderKind(order.order_kind, p);
+        }),
         scan,
         12,
       ),
-    [scan, catalogList],
+    [scan, catalogList, order],
   );
 
   const addUnitOptions = useMemo(
@@ -412,6 +427,16 @@ export default function WarehouseOrderDetail({
       toast({
         title: block.title,
         description: block.description || undefined,
+        variant: "destructive",
+      });
+      focusScan();
+      return false;
+    }
+    const mix = assertLineFitsOrderKind(order?.order_kind, p);
+    if (!mix.ok) {
+      notifyOrderKindMixBlocked();
+      toast({
+        title: mix.message,
         variant: "destructive",
       });
       focusScan();
@@ -623,6 +648,16 @@ export default function WarehouseOrderDetail({
       focusScan();
       return;
     }
+    const mix = assertLineFitsOrderKind(order?.order_kind, catalogHit || {
+      slug,
+      name,
+    });
+    if (!mix.ok) {
+      notifyOrderKindMixBlocked();
+      toast({ title: mix.message, variant: "destructive" });
+      focusScan();
+      return;
+    }
     const moq = moqOf(slug, unit);
     let qty = Math.max(1, Number(newQty) || 1);
     if (!allowPartial && qty === 1 && moq > 1) qty = moq;
@@ -665,9 +700,11 @@ export default function WarehouseOrderDetail({
       toast({ title: `Đã thêm ${slug || name} × ${qty}` });
       focusScan();
     } catch (e) {
+      const msg = e instanceof Error ? e.message : "Lỗi";
+      if (msg.includes("trộn lẫn")) notifyOrderKindMixBlocked();
       toast({
         title: "Lỗi thêm dòng",
-        description: e instanceof Error ? e.message : "Lỗi",
+        description: msg,
         variant: "destructive",
       });
     }
@@ -840,15 +877,16 @@ export default function WarehouseOrderDetail({
     setPrintIncludeOverride((prev) => ({ ...prev, [itemId]: included }));
   };
   const resetPrintIncludeToDefault = () => setPrintIncludeOverride({});
-  const displayOrderItems = variant === "packing"
-    ? [...order.order_items].sort((left, right) => {
-        // Không xuất (SL soạn > tồn) xuống cuối; đã hạ SL theo tồn lên trên
+  const displayOrderItems =
+    variant === "packing" && order && !isSttLockedOrder(order)
+      ? [...order.order_items].sort((left, right) => {
+        // Trước khi khóa STT: không xuất (SL soạn > tồn) xuống cuối
         const leftBlock = Number(isPackOverStock(left));
         const rightBlock = Number(isPackOverStock(right));
         if (leftBlock !== rightBlock) return leftBlock - rightBlock;
         return Number(isReqOverStock(left)) - Number(isReqOverStock(right));
       })
-    : order.order_items;
+      : order.order_items;
   const hiddenPackingItemCount = order.order_items.filter(isPackOverStock).length;
   const adjustedPackingItemCount = order.order_items.filter(
     (it) =>
@@ -1367,6 +1405,11 @@ export default function WarehouseOrderDetail({
             <Badge variant="secondary">
               {ORDER_KIND_LABELS[order.order_kind]}
             </Badge>
+            {isSttLockedOrder(order) ? (
+              <Badge variant="outline" className="font-normal">
+                STT đã khóa
+              </Badge>
+            ) : null}
             <Badge
               className={cn(
                 "font-normal",
@@ -1427,7 +1470,9 @@ export default function WarehouseOrderDetail({
                 });
                 return;
               }
-              openOrderPdfWindow(createPrintDetail());
+              void markOrderPrinted.mutateAsync(order.id).then(() => {
+                openOrderPdfWindow(createPrintDetail());
+              });
             }}
             disabled={stockLoading}
           >
@@ -1451,7 +1496,9 @@ export default function WarehouseOrderDetail({
                 });
                 return;
               }
-              printOrderViaIframe(createPrintDetail());
+              void markOrderPrinted.mutateAsync(order.id).then(() => {
+                printOrderViaIframe(createPrintDetail());
+              });
             }}
             disabled={stockLoading}
           >
@@ -1471,8 +1518,10 @@ export default function WarehouseOrderDetail({
                 });
                 return;
               }
-              exportOrderExcel(createPrintDetail());
-              toast({ title: "Đã tải file Excel" });
+              void markOrderPrinted.mutateAsync(order.id).then(() => {
+                exportOrderExcel(createPrintDetail());
+                toast({ title: "Đã tải file Excel" });
+              });
             }}
             disabled={stockLoading}
           >
@@ -1971,10 +2020,10 @@ export default function WarehouseOrderDetail({
           </TableHeader>
           <TableBody>
             {(() => {
-              // STT dùng biến đếm riêng để luôn liên tục 1,2,3… theo dòng hiển thị
-              let stt = 0;
+              let fallbackStt = 0;
               return displayOrderItems.map((it) => {
-              stt += 1;
+              fallbackStt += 1;
+              const stt = Number(it.stt) > 0 ? Number(it.stt) : fallbackStt;
               const soft = it.line_notes || "";
               const loi = hasLoiNote(soft) || hasLoiNote(order.notes);
               const req = it.qty_requested ?? it.quantity;

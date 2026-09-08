@@ -42,6 +42,7 @@ import {
 import { useProducts } from "@/hooks/useProducts";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { markWarehouseOrderPrinted } from "@/hooks/useWarehouseOrders";
 import {
   getHoChiMinhParts,
   toHoChiMinhMillis,
@@ -107,7 +108,7 @@ async function fetchPrintDetails(
       id, order_code, status, created_at, updated_at,
       source_warehouse:source_warehouse_id ( code, name ),
       warehouse:warehouse_id ( code, name ),
-      order_items ( product_name, product_slug, quantity, qty_requested, qty_packed, barcode, unit )
+      order_items ( stt, product_name, product_slug, quantity, qty_requested, qty_packed, barcode, unit )
     `,
     )
     .in("id", orderIds);
@@ -115,6 +116,7 @@ async function fetchPrintDetails(
   if (error) throw error;
 
   type Raw = {
+    id: string;
     order_code: string | null;
     status: string;
     created_at: string;
@@ -134,6 +136,7 @@ async function fetchPrintDetails(
       print_name?: string | null;
     } | null;
     order_items: {
+      stt?: number | null;
       product_name: string;
       product_slug: string | null;
       quantity: number;
@@ -162,16 +165,14 @@ async function fetchPrintDetails(
   return raws.map((o) => {
     const sx = enrichWarehouseMeta(o.source_warehouse);
     const sn = enrichWarehouseMeta(o.warehouse);
-    return {
-      soPhieu: o.order_code || "—",
-      khoXuat: whLabel(sx),
-      khoNhan: whLabel(sn),
-      diaChiXuat: sx?.address || null,
-      diaChiNhan: sn?.address || null,
-      thoiGianTao: o.created_at,
-      thoiGianCapNhat: o.updated_at || o.created_at,
-      status: o.status,
-      items: (o.order_items || []).flatMap((it) => {
+    const items = (o.order_items || [])
+      .slice()
+      .sort((a, b) => {
+        const aStt = Number(a.stt ?? Number.MAX_SAFE_INTEGER);
+        const bStt = Number(b.stt ?? Number.MAX_SAFE_INTEGER);
+        return aStt - bStt;
+      })
+      .flatMap((it) => {
         const meta = getMeta(metaIndex, it.product_slug);
         const resolved = resolveLineUnitBarcode(meta, it.unit, it.barcode);
         const requiredQty = Number(it.qty_requested ?? it.quantity) || 0;
@@ -185,6 +186,7 @@ async function fetchPrintDetails(
           meta?.is_out_stock
         ) return [];
         return [{
+          stt: Number(it.stt) > 0 ? Number(it.stt) : null,
           maHang: it.product_slug || "",
           tenHang: it.product_name,
           dvt: resolved.unit || "",
@@ -199,7 +201,18 @@ async function fetchPrintDetails(
           isNew: !!meta?.is_new,
           isLocked: !!meta?.is_locked,
         }];
-      }),
+      });
+    return {
+      orderId: o.id,
+      soPhieu: o.order_code || "—",
+      khoXuat: whLabel(sx),
+      khoNhan: whLabel(sn),
+      diaChiXuat: sx?.address || null,
+      diaChiNhan: sn?.address || null,
+      thoiGianTao: o.created_at,
+      thoiGianCapNhat: o.updated_at || o.created_at,
+      status: o.status,
+      items,
     };
   }).filter((detail) => detail.items.length > 0);
 }
@@ -277,6 +290,11 @@ export default function PrintDayModal({
         });
       }
       openMultiOrderPdfWindow(details, `In ${details.length} đơn — ${dateLabel}`);
+      await Promise.all(
+        details.map((d) =>
+          d.orderId ? markWarehouseOrderPrinted(d.orderId) : Promise.resolve(),
+        ),
+      );
       onOpenChange(false);
     } catch (e) {
       toast({

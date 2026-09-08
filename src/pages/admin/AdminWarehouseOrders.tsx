@@ -112,6 +112,8 @@ const AdminWarehouseOrders = () => {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [quick, setQuick] = useState<QuickFilter>("today");
   const [groupBy, setGroupBy] = useState<GroupBy>("warehouse");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   const filters = useMemo(
     () => ({
@@ -119,9 +121,11 @@ const AdminWarehouseOrders = () => {
       status,
       warehouseId: warehouseId === "ALL" ? null : warehouseId,
       search: search.trim() || undefined,
+      dateFrom: dateFrom || null,
+      dateTo: dateTo || null,
       limit: 300,
     }),
-    [kind, status, warehouseId, search],
+    [kind, status, warehouseId, search, dateFrom, dateTo],
   );
 
   const { data: orders, isLoading, isFetching, refetch } =
@@ -173,13 +177,13 @@ const AdminWarehouseOrders = () => {
 
   return (
     <AdminLayout>
-      <SEO title="Phiếu DH/DC | Kho K9" />
+      <SEO title="Phiếu DH/DT/DC | Kho K9" />
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold">Hub phiếu kho</h1>
             <p className="text-muted-foreground text-sm mt-0.5">
-              DH/DC · Xuất bán (XB) · lịch đa kho · tổng hợp soạn
+              DH đơn hàng · DT đơn thuốc · DC điều chuyển · XB · lịch đa kho
             </p>
           </div>
           <Button
@@ -261,6 +265,7 @@ const AdminWarehouseOrders = () => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="ALL">Tất cả loại</SelectItem>
+                  <SelectItem value="DT">{ORDER_KIND_LABELS.DT}</SelectItem>
                   <SelectItem value="DH">{ORDER_KIND_LABELS.DH}</SelectItem>
                   <SelectItem value="DC">{ORDER_KIND_LABELS.DC}</SelectItem>
                 </SelectContent>
@@ -295,6 +300,20 @@ const AdminWarehouseOrders = () => {
                 placeholder="Tìm mã phiếu…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+              />
+              <Input
+                type="date"
+                className="h-8"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                aria-label="Từ ngày"
+              />
+              <Input
+                type="date"
+                className="h-8"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                aria-label="Đến ngày"
               />
             </div>
 
@@ -384,7 +403,7 @@ const AdminWarehouseOrders = () => {
                                     variant="outline"
                                     className="text-[10px] h-5 px-1"
                                   >
-                                    {o.order_kind}
+                                    {ORDER_KIND_LABELS[o.order_kind] || o.order_kind}
                                   </Badge>
                                 </TableCell>
                                 <TableCell

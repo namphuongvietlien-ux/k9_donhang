@@ -17,7 +17,7 @@ import { useProducts } from "@/hooks/useProducts";
 import { useStock, usePackingSourceWarehouse } from "@/hooks/useStock";
 import { useWarehouseOrderMutations } from "@/hooks/useWarehouseOrders";
 import type { DuplicatePreSaveResult } from "@/hooks/useOrderImport";
-import type { PhieuLoai } from "@/lib/importOrders";
+import { isQ7PhieuLoai, phieuLoaiToKind, type PhieuLoai } from "@/lib/importOrders";
 import { downloadImportTemplate } from "@/lib/importTemplates";
 import { exportKiotVietTransferFile } from "@/lib/transferExportTemplate";
 import {
@@ -30,6 +30,11 @@ import {
   isServiceCatalogItem,
   isVisibleSellableCatalog,
 } from "@/lib/productCategory";
+import {
+  assertLineFitsOrderKind,
+  lineFitsOrderKind,
+  notifyOrderKindMixBlocked,
+} from "@/lib/orderKindMix";
 import { ProductSearchInput } from "@/components/admin/ProductSearchInput";
 import { OrderItemsGrid } from "@/components/admin/OrderItemsGrid";
 import {
@@ -131,6 +136,8 @@ interface CatalogHit {
   is_locked?: boolean;
   is_out_stock?: boolean;
   category_group?: string | null;
+  sku_industry?: string | null;
+  sku_detail?: string | null;
 }
 
 interface CreateWarehouseOrderFormProps {
@@ -231,7 +238,13 @@ const CreateWarehouseOrderForm = forwardRef<
     restoredToastShown.current = true;
     toast({
       title: "Đã khôi phục bản nháp chưa lưu trước đó!",
-      description: `${initialDraft.lines.length} dòng · ${initialDraft.loai === "DieuChuyen" ? "Điều chuyển" : "Đơn hàng"}`,
+      description: `${initialDraft.lines.length} dòng · ${
+        initialDraft.loai === "DieuChuyen"
+          ? "Điều chuyển"
+          : initialDraft.loai === "DonThuoc"
+            ? "Đơn thuốc"
+            : "Đơn hàng"
+      }`,
     });
   }, [toast, initialDraft]);
 
@@ -245,8 +258,8 @@ const CreateWarehouseOrderForm = forwardRef<
   useEffect(() => {
     if (!warehouses.length) return;
     const q7w = warehouses.find((w) => w.code === "Q7");
-    if (loai === "DonHang") {
-      // Đơn hàng: xuất luôn Q7
+    if (isQ7PhieuLoai(loai)) {
+      // Đơn hàng / đơn thuốc: xuất luôn Q7
       if (q7w) setSourceWh(q7w.id);
       // Chi nhánh: khóa kho nhận = kho được cấp
       if (isStoreScoped && scopedWhId) {
@@ -282,7 +295,7 @@ const CreateWarehouseOrderForm = forwardRef<
   // Giữ khóa cứng khi scope đổi giữa phiên
   useEffect(() => {
     if (!isStoreScoped || !scopedWhId) return;
-    if (loai === "DonHang") setDestWh(scopedWhId);
+    if (isQ7PhieuLoai(loai)) setDestWh(scopedWhId);
     else setSourceWh(scopedWhId);
   }, [isStoreScoped, scopedWhId, loai]);
 
@@ -306,13 +319,16 @@ const CreateWarehouseOrderForm = forwardRef<
         is_locked: !!p.is_locked,
         is_out_stock: !!p.is_out_stock,
         category_group: p.category_group || null,
+        sku_industry: p.sku_industry || null,
+        sku_detail: p.sku_detail || null,
       }));
   }, [products]);
 
   const skuUnitIndex = useSkuUnitIndex(catalogList as CatalogProductRow[]);
 
-  const withGifts = (rows: CartLine[]): CartLine[] =>
-    attachGiftLines(rows, giftRules, {
+  const withGifts = (rows: CartLine[]): CartLine[] => {
+    const kind = phieuLoaiToKind(loai);
+    return attachGiftLines(rows, giftRules, {
       isGift: (line) => !!line.isGift,
       mainOf: (line) => ({
         id: line.productId,
@@ -341,7 +357,16 @@ const CreateWarehouseOrderForm = forwardRef<
           giftRuleId: seed.ruleId,
         };
       },
+    }).filter((line) => {
+      if (!line.isGift) return true;
+      const hit = catalogList.find(
+        (p) =>
+          p.id === line.productId ||
+          normalizeOrderCodeText(p.slug) === normalizeOrderCodeText(line.maHang),
+      );
+      return lineFitsOrderKind(kind, hit || { slug: line.maHang, name: line.tenHang });
     });
+  };
 
   useEffect(() => {
     if (!giftRules.length) return;
@@ -354,18 +379,21 @@ const CreateWarehouseOrderForm = forwardRef<
           .join("|");
       return sig(prev) === sig(next) ? prev : next;
     });
-  }, [giftRules]);
+  }, [giftRules, loai]);
 
   // Lọc mã vạch chặt (exact / prefix) đã nằm trong filterCatalogSuggestions —
   // không vá lại ở tầng form để hai nơi không lệch nhau.
   const suggestions = useMemo(
     () =>
       filterCatalogSuggestions(
-        catalogList.filter((p) => !isServiceCatalogItem(p)),
+        catalogList.filter((p) => {
+          if (isServiceCatalogItem(p)) return false;
+          return lineFitsOrderKind(phieuLoaiToKind(loai), p);
+        }),
         scan,
         12,
       ),
-    [scan, catalogList],
+    [scan, catalogList, loai],
   );
 
   /** Khớp tuyệt đối: mã hàng trước, mã vạch sau, mã vạch dùng chung → ambiguous */
@@ -404,6 +432,14 @@ const CreateWarehouseOrderForm = forwardRef<
         description: block.description || undefined,
         variant: "destructive",
       });
+      setScan("");
+      scanRef.current?.focus();
+      return;
+    }
+    const mix = assertLineFitsOrderKind(phieuLoaiToKind(loai), p);
+    if (!mix.ok) {
+      notifyOrderKindMixBlocked();
+      toast({ title: mix.message, variant: "destructive" });
       setScan("");
       scanRef.current?.focus();
       return;
@@ -673,6 +709,27 @@ const CreateWarehouseOrderForm = forwardRef<
       return;
     }
 
+    const kind = phieuLoaiToKind(loai);
+    const mixBad = preparedLines.find((l) => {
+      const hit = catalogList.find(
+        (p) =>
+          p.id === l.productId ||
+          normalizeOrderCodeText(p.slug) === normalizeOrderCodeText(l.maHang),
+      );
+      return !lineFitsOrderKind(
+        kind,
+        hit || { slug: l.maHang, name: l.tenHang },
+      );
+    });
+    if (mixBad) {
+      notifyOrderKindMixBlocked();
+      toast({
+        title: "Không được trộn lẫn! Vui lòng nhập thuốc và hàng hóa riêng biệt",
+        variant: "destructive",
+      });
+      return;
+    }
+
     try {
       const res = await createOrder.mutateAsync({
         loaiPhieu: loai,
@@ -713,6 +770,9 @@ const CreateWarehouseOrderForm = forwardRef<
         description: e instanceof Error ? e.message : "Lỗi",
         variant: "destructive",
       });
+      if (e instanceof Error && e.message.includes("trộn lẫn")) {
+        notifyOrderKindMixBlocked();
+      }
     }
   };
 
@@ -730,9 +790,8 @@ const CreateWarehouseOrderForm = forwardRef<
   const destCode = destWhRow ? formatWhLabel(destWhRow) : "—";
   /** Đơn hàng: khóa xuất Q7; Điều chuyển + CN: khóa xuất = kho được cấp */
   const sourceLocked =
-    loai === "DonHang" || (loai === "DieuChuyen" && isStoreScoped);
-  /** Đơn hàng + CN: khóa nhận = kho được cấp */
-  const destLocked = loai === "DonHang" && isStoreScoped;
+    isQ7PhieuLoai(loai) || (loai === "DieuChuyen" && isStoreScoped);
+  const destLocked = isQ7PhieuLoai(loai) && isStoreScoped;
 
   return (
     <div className="space-y-4">
@@ -753,15 +812,64 @@ const CreateWarehouseOrderForm = forwardRef<
       <div className="border rounded-lg p-4 space-y-4 bg-card">
         <div className="space-y-2">
           <Label>Loại đơn</Label>
-          <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex flex-col sm:flex-row gap-3 flex-wrap">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="loaiPhieu"
+                checked={loai === "DonThuoc"}
+                onChange={() => {
+                  const kind = phieuLoaiToKind("DonThuoc");
+                  const bad = lines.some((l) => {
+                    if (l.isGift) return false;
+                    const hit = catalogList.find(
+                      (p) =>
+                        p.id === l.productId ||
+                        normalizeOrderCodeText(p.slug) ===
+                          normalizeOrderCodeText(l.maHang),
+                    );
+                    return !lineFitsOrderKind(
+                      kind,
+                      hit || { slug: l.maHang, name: l.tenHang },
+                    );
+                  });
+                  if (bad) {
+                    notifyOrderKindMixBlocked();
+                    return;
+                  }
+                  setLoai("DonThuoc");
+                }}
+              />
+              Đơn thuốc (DT- · lấy từ Q7)
+            </label>
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input
                 type="radio"
                 name="loaiPhieu"
                 checked={loai === "DonHang"}
-                onChange={() => setLoai("DonHang")}
+                onChange={() => {
+                  const kind = phieuLoaiToKind("DonHang");
+                  const bad = lines.some((l) => {
+                    if (l.isGift) return false;
+                    const hit = catalogList.find(
+                      (p) =>
+                        p.id === l.productId ||
+                        normalizeOrderCodeText(p.slug) ===
+                          normalizeOrderCodeText(l.maHang),
+                    );
+                    return !lineFitsOrderKind(
+                      kind,
+                      hit || { slug: l.maHang, name: l.tenHang },
+                    );
+                  });
+                  if (bad) {
+                    notifyOrderKindMixBlocked();
+                    return;
+                  }
+                  setLoai("DonHang");
+                }}
               />
-              Tạo Đơn Hàng (lấy từ Q7)
+              Đơn hàng (DH- · lấy từ Q7)
             </label>
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input
@@ -770,7 +878,7 @@ const CreateWarehouseOrderForm = forwardRef<
                 checked={loai === "DieuChuyen"}
                 onChange={() => setLoai("DieuChuyen")}
               />
-              Đơn Điều Chuyển (giữa các kho)
+              Điều chuyển (DC- · giữa các kho)
             </label>
           </div>
         </div>
@@ -781,7 +889,7 @@ const CreateWarehouseOrderForm = forwardRef<
               Kho xuất
               {sourceLocked ? (
                 <span className="text-xs text-muted-foreground ml-1">
-                  {loai === "DonHang"
+                  {isQ7PhieuLoai(loai)
                     ? "(khóa Q7)"
                     : `(khóa ${scopedLabel || "chi nhánh"})`}
                 </span>

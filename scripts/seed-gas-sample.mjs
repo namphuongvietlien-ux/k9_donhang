@@ -132,6 +132,7 @@ function mapStatus(raw) {
 
 function inferKind(soPhieu) {
   const c = String(soPhieu || "").toUpperCase();
+  if (c.startsWith("DT") || c.includes("DT-")) return "DT";
   if (c.startsWith("DH-") || c.includes("DH-")) return "DH";
   if (c.includes("ĐC") || c.includes("DC") || c.startsWith("Q7-")) return "DC";
   return null;

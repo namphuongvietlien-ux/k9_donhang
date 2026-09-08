@@ -45,6 +45,8 @@ import {
 import {
   WAREHOUSE_STATUS_BADGE,
   WAREHOUSE_STATUS_LABELS,
+  ORDER_KIND_LABELS,
+  type OrderKind,
 } from "@/lib/warehouseOrders";
 import SEO from "@/components/SEO";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -232,9 +234,10 @@ function ManageOrdersPanel() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [branchId, setBranchId] = useState(scopedWhId || "all");
+  const [kind, setKind] = useState<OrderKind | "ALL">("ALL");
   const warehouseId = isStoreScoped ? scopedWhId : branchId === "all" ? null : branchId;
   const { data: orders, isLoading, refetch, isFetching } = useWarehouseOrders({
-    kind: "ALL",
+    kind,
     limit: 2000,
     warehouseId,
     dateFrom: dateFrom || null,
@@ -275,6 +278,23 @@ function ManageOrdersPanel() {
               value={dateTo}
               onChange={(e) => setDateTo(e.target.value)}
             />
+          </div>
+          <div>
+            <Label className="text-xs">Loại phiếu</Label>
+            <Select
+              value={kind}
+              onValueChange={(v) => setKind(v as OrderKind | "ALL")}
+            >
+              <SelectTrigger className="mt-1 h-9 w-[200px]" aria-label="Loại phiếu">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">Tất cả (DH / DT / DC)</SelectItem>
+                <SelectItem value="DT">{ORDER_KIND_LABELS.DT}</SelectItem>
+                <SelectItem value="DH">{ORDER_KIND_LABELS.DH}</SelectItem>
+                <SelectItem value="DC">{ORDER_KIND_LABELS.DC}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           {!isStoreScoped ? (
             <div>
@@ -333,7 +353,8 @@ function ManageOrdersPanel() {
         </Button>
       </div>
       <p className="text-sm text-muted-foreground">
-        Tra cứu phiếu DH/DC — bấm mã để xem / sửa / soạn. Lọc ngày theo ngày tạo, xuất đúng bộ lọc đang xem.
+        Tra cứu phiếu DH (đơn hàng) / DT (đơn thuốc) / DC — lọc theo ngày tạo và
+        chi nhánh, bấm mã để xem / sửa / soạn.
       </p>
       {isLoading ? (
         <div className="py-12 flex justify-center">
@@ -365,7 +386,9 @@ function ManageOrdersPanel() {
                   <TableCell className="font-mono font-medium">
                     {o.order_code}
                   </TableCell>
-                  <TableCell>{o.order_kind}</TableCell>
+                  <TableCell>
+                    {ORDER_KIND_LABELS[o.order_kind] || o.order_kind}
+                  </TableCell>
                   <TableCell className="text-sm whitespace-nowrap">
                     {warehouseShortLabel(o.source_warehouse)} →{" "}
                     {warehouseShortLabel(o.warehouse)}
@@ -680,7 +703,7 @@ export default function WarehousePortal() {
                 </TabsTrigger>
                 <TabsTrigger value="dhdc">
                   <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />
-                  Import phiếu DH/DC
+                  Import phiếu DH/DT/DC
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="transfer" className="mt-4">
@@ -690,7 +713,7 @@ export default function WarehousePortal() {
                 <Card>
                   <CardHeader>
                     <CardTitle className="text-base">
-                      Import Excel phiếu DH/DC
+                      Import Excel phiếu DH/DT/DC
                     </CardTitle>
                   </CardHeader>
                   <CardContent>

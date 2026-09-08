@@ -1,10 +1,14 @@
+import argparse
 import csv
 import json
 import os
 from pathlib import Path
 from urllib import error, request
+from urllib.parse import quote
 
 CSV_PATH = Path(r"C:\Users\ASUS\Downloads\mau-nhap-khau-danh-muc (3).csv")
+# Bản CSV mới nhất (đổi tên / dịch) — dùng với --update-names
+TRANSLATED_CSV_PATH = Path(r"C:\Users\ASUS\Downloads\mau-nhap-khau-danh-muc (6).csv")
 ROOT = Path(__file__).resolve().parent
 ENV_PATH = ROOT / ".env"
 
@@ -109,7 +113,7 @@ def rest_request(method: str, path: str, payload=None):
         "Prefer": "resolution=merge-duplicates",
     }
     if method == "PATCH":
-        headers["Prefer"] = "resolution=merge-duplicates"
+        headers["Prefer"] = "return=minimal"
     req = request.Request(url, method=method, headers=headers, data=data)
     with request.urlopen(req, timeout=120) as res:
         raw = res.read()
@@ -215,5 +219,79 @@ def main():
     print("\nHoàn tất. Nếu active_count = số SKU CSV, bạn đã chuyển sang danh mục mới thành công.")
 
 
+def encode_filter_value(value: str) -> str:
+    """Giá trị filter PostgREST — quote nếu SKU có ký tự đặc biệt."""
+    safe = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._")
+    if all(ch in safe for ch in value):
+        return quote(value, safe="")
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return quote(f'"{escaped}"', safe="")
+
+
+def update_translated_names(csv_file_path: str | Path):
+    """
+    PATCH name theo slug — cập nhật MỌI dòng products cùng mã
+    (1 SKU nhiều ĐVT). Không dùng POST on_conflict=slug.
+    """
+    path = Path(csv_file_path)
+    print(f"Reading translated CSV: {path}", flush=True)
+    if not path.exists():
+        raise FileNotFoundError(f"Không tìm thấy file! Hãy kiểm tra lại đường dẫn: {path}")
+
+    # 1 SKU 1 tên (dòng sau ghi đè) — tránh PATCH trùng
+    names_by_slug: dict[str, str] = {}
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            sku = (row.get("Mã hàng") or "").strip()
+            new_name = (row.get("Tên hàng") or "").strip()
+            if sku and new_name:
+                names_by_slug[sku] = new_name
+
+    print(f"Will update {len(names_by_slug)} SKUs (duplicate slugs in CSV merged).", flush=True)
+    count = 0
+    failed = []
+    for sku, new_name in names_by_slug.items():
+        try:
+            rest_request(
+                "PATCH",
+                f"/products?slug=eq.{encode_filter_value(sku)}",
+                {"name": new_name},
+            )
+            count += 1
+            if count % 50 == 0 or count == 1:
+                line = f"  [{count}/{len(names_by_slug)}] {sku} -> {new_name}"
+                try:
+                    print(line, flush=True)
+                except UnicodeEncodeError:
+                    print(line.encode("ascii", "replace").decode("ascii"))
+        except error.HTTPError as exc:
+            failed.append((sku, exc.code))
+            print(f"  x FAIL {sku} (HTTP {exc.code})")
+
+    print(f"\nHOAN TAT. Da cap nhat {count} ma hang.")
+    if failed:
+        print(f"That bai {len(failed)} SKU: {', '.join(s for s, _ in failed[:20])}")
+
+
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Import / cap nhat danh muc tu CSV")
+    parser.add_argument(
+        "--full-import",
+        action="store_true",
+        help="An toan bo SP roi upsert (CSV_PATH cu).",
+    )
+    parser.add_argument(
+        "--update-names",
+        nargs="?",
+        const=str(TRANSLATED_CSV_PATH),
+        metavar="CSV",
+        help="PATCH ten hang theo slug. Mac dinh: mau-nhap-khau-danh-muc (6).csv",
+    )
+    args = parser.parse_args()
+
+    if args.full_import:
+        main()
+    else:
+        csv_path = args.update_names or str(TRANSLATED_CSV_PATH)
+        update_translated_names(csv_path)

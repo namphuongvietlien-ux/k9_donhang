@@ -20,7 +20,17 @@ import {
 } from "@/lib/packingWindows";
 import { applySoftLineRules } from "@/lib/softLineValidation";
 
-export type PhieuLoai = "DonHang" | "DieuChuyen";
+export type PhieuLoai = "DonHang" | "DonThuoc" | "DieuChuyen";
+
+export function isQ7PhieuLoai(loai: PhieuLoai): boolean {
+  return loai === "DonHang" || loai === "DonThuoc";
+}
+
+export function phieuLoaiToKind(loai: PhieuLoai): "DH" | "DT" | "DC" {
+  if (loai === "DonThuoc") return "DT";
+  if (loai === "DonHang") return "DH";
+  return "DC";
+}
 
 export interface ProductRef {
   id: string;
@@ -29,6 +39,9 @@ export interface ProductRef {
   price: number | null;
   unit: string | null;
   barcode?: string | null;
+  category_group?: string | null;
+  sku_industry?: string | null;
+  sku_detail?: string | null;
 }
 
 export interface ImportLineDraft {
@@ -62,9 +75,9 @@ export interface ParsedImportFile {
   warningCount: number;
 }
 
-/** DH-xxxxxx / DC-xxxxxx */
+/** DH-xxxxxx / DT-xxxxxx / DC-xxxxxx */
 export function generateOrderCode(loai: PhieuLoai): string {
-  const prefix = loai === "DonHang" ? "DH" : "DC";
+  const prefix = phieuLoaiToKind(loai);
   const n = Math.floor(100000 + Math.random() * 900000);
   return `${prefix}-${n}`;
 }
@@ -232,7 +245,7 @@ export function buildOrderInsertPayload(input: BuildOrderInsertInput) {
   const orderCode = generateOrderCode(input.loaiPhieu);
   const hasError = allLines.some((l) => l.hasSoftError || !!l.lineNotes);
 
-  const orderKind = input.loaiPhieu === "DonHang" ? "DH" : "DC";
+  const orderKind = phieuLoaiToKind(input.loaiPhieu);
   const orderRow = {
     order_code: orderCode,
     order_kind: orderKind,
@@ -255,7 +268,8 @@ export function buildOrderInsertPayload(input: BuildOrderInsertInput) {
     duplicate_accepted: !!input.duplicateAcknowledged,
   };
 
-  const itemRows = allLines.map((l) => ({
+  const itemRows = allLines.map((l, index) => ({
+    stt: index + 1,
     product_name: l.tenHang,
     product_slug: l.productSlug,
     product_image: null as string | null,

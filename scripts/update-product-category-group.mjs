@@ -55,6 +55,9 @@ const THUOC_PREFIXES = [
   "HDTTKS",
   "IT13",
   "IT23",
+  "HCN",
+  "MCN",
+  "CCN",
 ];
 
 function loadEnv() {
@@ -142,7 +145,9 @@ function isForcedThuoc(slug, name) {
   if (THUOC_PREFIXES.some((p) => folded.startsWith(p))) return true;
   const n = String(name || "").normalize("NFC").toLowerCase();
   if (
-    /thuốc|thuoc|vắc\s*xin|vac\s*xin|vắc-xin|vaccine|vắc xin/.test(n)
+    /thuốc|thuoc|vắc\s*xin|vac\s*xin|vắc-xin|vaccine|vắc xin|tpcn|thực phẩm chức năng|thuc pham chuc nang/.test(
+      n,
+    )
   ) {
     return true;
   }

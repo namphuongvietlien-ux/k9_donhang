@@ -12,6 +12,8 @@ import {
 } from "@/hooks/useOrderImport";
 import {
   parseOrderImportMatrix,
+  isQ7PhieuLoai,
+  phieuLoaiToKind,
   type ParsedImportFile,
   type PhieuLoai,
 } from "@/lib/importOrders";
@@ -46,6 +48,11 @@ import {
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import {
+  lineFitsOrderKind,
+  notifyOrderKindMixBlocked,
+  ORDER_KIND_MIX_MESSAGE,
+} from "@/lib/orderKindMix";
 
 interface DataImportProps {
   onSuccess?: () => void;
@@ -96,7 +103,7 @@ export default function DataImport({ onSuccess, className }: DataImportProps) {
   useEffect(() => {
     if (!warehouses.length) return;
     const q7 = warehouses.find((w) => w.code === "Q7");
-    if (loaiPhieu === "DonHang" && q7) {
+    if (isQ7PhieuLoai(loaiPhieu) && q7) {
       setSourceWh(q7.id);
     } else if (!sourceWh) {
       setSourceWh(q7?.id || catalogStock?.warehouseId || warehouses[0].id);
@@ -118,6 +125,25 @@ export default function DataImport({ onSuccess, className }: DataImportProps) {
         .length ?? 0,
     [parsed],
   );
+  const mixLineCount = useMemo(() => {
+    if (!parsed || !catalogStock) return 0;
+    const kind = phieuLoaiToKind(loaiPhieu);
+    const bySlug = new Map(
+      catalogStock.catalog.map((p) => [
+        String(p.slug || "")
+          .trim()
+          .toUpperCase(),
+        p,
+      ]),
+    );
+    return parsed.lines.filter((l) => {
+      const slug = String(l.productSlug || l.maHang || "")
+        .trim()
+        .toUpperCase();
+      const hit = bySlug.get(slug) || { slug: l.productSlug, name: l.tenHang };
+      return !lineFitsOrderKind(kind, hit);
+    }).length;
+  }, [parsed, catalogStock, loaiPhieu]);
 
   const runParse = useCallback(
     async (file: File) => {
@@ -191,10 +217,16 @@ export default function DataImport({ onSuccess, className }: DataImportProps) {
     !!parsed &&
     parsed.lines.length > 0 &&
     !!destWh &&
-    !commit.isPending;
+    !commit.isPending &&
+    mixLineCount === 0;
 
   const doImport = async (acknowledgeDuplicate: boolean) => {
     if (!parsed || !destWh) return;
+    if (mixLineCount > 0) {
+      notifyOrderKindMixBlocked();
+      toast({ title: ORDER_KIND_MIX_MESSAGE, variant: "destructive" });
+      return;
+    }
     try {
       const res = await commit.mutateAsync({
         loaiPhieu,
@@ -222,10 +254,21 @@ export default function DataImport({ onSuccess, className }: DataImportProps) {
         return;
       }
       toast({
-        title: "Import thất bại",
-        description: e instanceof Error ? e.message : "Lỗi không xác định",
+        title:
+          e instanceof Error && e.message.includes("trộn lẫn")
+            ? ORDER_KIND_MIX_MESSAGE
+            : "Import thất bại",
+        description:
+          e instanceof Error && e.message.includes("trộn lẫn")
+            ? undefined
+            : e instanceof Error
+              ? e.message
+              : "Lỗi không xác định",
         variant: "destructive",
       });
+      if (e instanceof Error && e.message.includes("trộn lẫn")) {
+        notifyOrderKindMixBlocked();
+      }
     }
   };
 
@@ -238,7 +281,7 @@ export default function DataImport({ onSuccess, className }: DataImportProps) {
   };
 
   const loadingBase = whLoading || baseLoading;
-  const sourceLocked = loaiPhieu === "DonHang";
+  const sourceLocked = isQ7PhieuLoai(loaiPhieu);
 
   return (
     <div className={cn("space-y-4", className)}>
@@ -261,6 +304,7 @@ export default function DataImport({ onSuccess, className }: DataImportProps) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="DonThuoc">Đơn thuốc (DT-)</SelectItem>
               <SelectItem value="DonHang">Đơn hàng (DH-)</SelectItem>
               <SelectItem value="DieuChuyen">Điều chuyển (DC-)</SelectItem>
             </SelectContent>
@@ -384,6 +428,9 @@ export default function DataImport({ onSuccess, className }: DataImportProps) {
             {shortageCount > 0 && (
               <Badge variant="destructive">THIẾU tồn Q7: {shortageCount} SKU</Badge>
             )}
+            {mixLineCount > 0 && (
+              <Badge variant="destructive">{mixLineCount} dòng trộn DH/DT</Badge>
+            )}
             {errorLineCount > 0 && (
               <Badge variant="outline" className="border-amber-400 text-amber-800">
                 {errorLineCount} dòng có cảnh báo mã/ĐVT
@@ -393,6 +440,18 @@ export default function DataImport({ onSuccess, className }: DataImportProps) {
               Bỏ junk {parsed.skippedJunk} · trống {parsed.skippedEmpty}
             </span>
           </div>
+
+          {mixLineCount > 0 && (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>{ORDER_KIND_MIX_MESSAGE}</AlertTitle>
+              <AlertDescription>
+                File đang có {mixLineCount} dòng không khớp loại phiếu{" "}
+                {loaiPhieu === "DonThuoc" ? "Đơn thuốc (DT)" : loaiPhieu === "DonHang" ? "Đơn hàng (DH)" : "Điều chuyển"}.
+                Tách thuốc và hàng hóa ra file riêng trước khi import.
+              </AlertDescription>
+            </Alert>
+          )}
 
           <div className="rounded-md border max-h-[360px] overflow-auto">
             <Table>

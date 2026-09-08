@@ -126,7 +126,7 @@ serve(async (req) => {
       order_items ( product_slug, product_name, quantity, unit )
     `,
     )
-    .in("order_kind", ["DH", "DC"])
+    .in("order_kind", ["DH", "DT", "DC"])
     .in("status", ["pending", "processing"])
     .eq("packing_date", today)
     .in("warehouse_id", destIds);

@@ -2,12 +2,18 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import {
   generateOrderCode,
+  isQ7PhieuLoai,
+  phieuLoaiToKind,
   type PhieuLoai,
 } from "@/lib/importOrders";
 import {
   inferOrderKind,
+  isQ7InternalKind,
+  orderKindCustomerName,
+  WAREHOUSE_ORDER_KINDS,
   type OrderKind,
 } from "@/lib/warehouseOrders";
+import { assertLineFitsOrderKind } from "@/lib/orderKindMix";
 import {
   buildOrderSkuSignature,
   inferPackingDayFromCreatedAt,
@@ -53,6 +59,8 @@ export interface WarehouseOrder {
   order_code: string | null;
   is_locked: boolean;
   locked_at: string | null;
+  stt_locked_at: string | null;
+  printed_at: string | null;
   order_kind: OrderKind;
   customer_name: string;
   status: string;
@@ -103,7 +111,7 @@ const ITEM_SELECT =
 
 /** Cơ bản + nhãn Q4 Cũ/Mới — luôn lấy short_name để UI không hiện Q4_275 */
 const ORDER_SELECT = `
-  id, order_code, is_locked, locked_at, order_kind, customer_name, status, created_at, updated_at, notes,
+  id, order_code, is_locked, locked_at, stt_locked_at, printed_at, order_kind, customer_name, status, created_at, updated_at, notes,
   warehouse_id, source_warehouse_id, packing_date, packing_shift, total_amount,
   source_warehouse:source_warehouse_id ( id, code, name, short_name, print_name, address ),
   warehouse:warehouse_id ( id, code, name, short_name, print_name, address ),
@@ -111,7 +119,7 @@ const ORDER_SELECT = `
 `;
 
 const ORDER_SELECT_BASIC = `
-  id, order_code, is_locked, locked_at, order_kind, customer_name, status, created_at, updated_at, notes,
+  id, order_code, is_locked, locked_at, stt_locked_at, printed_at, order_kind, customer_name, status, created_at, updated_at, notes,
   warehouse_id, source_warehouse_id, packing_date, packing_shift, total_amount,
   source_warehouse:source_warehouse_id ( id, code, name ),
   warehouse:warehouse_id ( id, code, name ),
@@ -194,11 +202,17 @@ function attachProductFlags(
   });
 }
 
-function sortOrderItemsByStt<T extends { stt?: number | null }>(items: T[]): T[] {
+function sortOrderItemsByStt<T extends { stt?: number | null; id?: string }>(
+  items: T[],
+): T[] {
   return [...items].sort((a, b) => {
-    const aStt = Number(a.stt ?? Number.MAX_SAFE_INTEGER);
-    const bStt = Number(b.stt ?? Number.MAX_SAFE_INTEGER);
-    return aStt - bStt;
+    const aStt = Number(a.stt);
+    const bStt = Number(b.stt);
+    const aOk = Number.isFinite(aStt) && aStt > 0;
+    const bOk = Number.isFinite(bStt) && bStt > 0;
+    if (aOk && bOk && aStt !== bStt) return aStt - bStt;
+    if (aOk !== bOk) return aOk ? -1 : 1;
+    return String(a.id || "").localeCompare(String(b.id || ""));
   });
 }
 
@@ -218,6 +232,8 @@ function mapOrder(row: Record<string, unknown>): WarehouseOrder {
     order_code: code,
     is_locked: !!row.is_locked,
     locked_at: (row.locked_at as string) || null,
+    stt_locked_at: (row.stt_locked_at as string) || null,
+    printed_at: (row.printed_at as string) || null,
     order_kind: (row.order_kind as OrderKind) || inferOrderKind(code),
     customer_name: (row.customer_name as string) || "",
     status: (row.status as string) || "pending",
@@ -317,6 +333,96 @@ async function getNextOrderItemStt(orderId: string): Promise<number> {
   return Number((data as { stt?: number | null } | null)?.stt ?? 0) + 1;
 }
 
+async function fetchMixHintsBySlug(slugs: string[]) {
+  const unique = [
+    ...new Set(slugs.map((s) => normalizeOrderCodeText(s)).filter(Boolean)),
+  ];
+  if (!unique.length) return new Map<string, Record<string, string | null>>();
+  let select = "slug, name, category_group, sku_industry, sku_detail";
+  let { data, error } = await supabase
+    .from("products")
+    .select(select)
+    .in("slug", unique);
+  if (error && /sku_industry|sku_detail/i.test(error.message || "")) {
+    const retry = await supabase
+      .from("products")
+      .select("slug, name, category_group")
+      .in("slug", unique);
+    data = retry.data;
+    error = retry.error;
+  }
+  if (error) throw error;
+  const map = new Map<string, Record<string, string | null>>();
+  for (const row of (data as Record<string, string | null>[] | null) || []) {
+    const key = normalizeOrderCodeText(row.slug);
+    if (key) map.set(key, row);
+  }
+  return map;
+}
+
+async function assertOrderLinesFitKind(
+  kind: string | null | undefined,
+  lines: { productSlug?: string | null; productName?: string | null }[],
+) {
+  if (kind !== "DH" && kind !== "DT") return;
+  const hints = await fetchMixHintsBySlug(
+    lines.map((l) => l.productSlug || ""),
+  );
+  for (const line of lines) {
+    const slug = normalizeOrderCodeText(line.productSlug || "");
+    const hint = hints.get(slug) || {
+      slug: line.productSlug || "",
+      name: line.productName || "",
+    };
+    const check = assertLineFitsOrderKind(kind, hint);
+    if (!check.ok) throw new Error(check.message);
+  }
+}
+
+export async function markWarehouseOrderPrinted(orderId: string) {
+  const { error } = await supabase.rpc(
+    "mark_warehouse_order_printed" as never,
+    { _order_id: orderId } as never,
+  );
+  if (error && /mark_warehouse_order_printed|schema cache|does not exist/i.test(error.message || "")) {
+    const { error: lockErr } = await supabase.rpc(
+      "lock_warehouse_order_stt" as never,
+      { _order_id: orderId } as never,
+    );
+    if (lockErr) {
+      await supabase
+        .from("orders")
+        .update({
+          stt_locked_at: new Date().toISOString(),
+          printed_at: new Date().toISOString(),
+        } as never)
+        .eq("id", orderId);
+      return;
+    }
+    await supabase
+      .from("orders")
+      .update({ printed_at: new Date().toISOString() } as never)
+      .eq("id", orderId);
+    return;
+  }
+  if (error) throw error;
+}
+
+async function lockOrderStt(orderId: string) {
+  const { error } = await supabase.rpc(
+    "lock_warehouse_order_stt" as never,
+    { _order_id: orderId } as never,
+  );
+  if (error && /lock_warehouse_order_stt|schema cache|does not exist/i.test(error.message || "")) {
+    await supabase
+      .from("orders")
+      .update({ stt_locked_at: new Date().toISOString() } as never)
+      .eq("id", orderId);
+    return;
+  }
+  if (error) throw error;
+}
+
 async function loadOrderTelegramCtx(orderId: string) {
   const { data } = await supabase
     .from("orders")
@@ -349,7 +455,7 @@ function applyWarehouseOrderFilters<T extends { eq: (c: string, v: unknown) => T
   if (filters.kind && filters.kind !== "ALL") {
     next = next.eq("order_kind" as never, filters.kind);
   } else {
-    next = next.in("order_kind" as never, ["DH", "DC"]);
+    next = next.in("order_kind" as never, [...WAREHOUSE_ORDER_KINDS]);
   }
   if (filters.status && filters.status !== "ALL") {
     next = next.eq("status", filters.status);
@@ -387,12 +493,13 @@ export function useWarehouseOrders(filters: WarehouseOrderFilters = {}) {
           .from("orders")
           .select(ORDER_SELECT)
           .order("created_at", { ascending: false })
+          .order("stt", { referencedTable: "order_items", ascending: true })
           .limit(filters.limit ?? 150),
         filters,
       );
 
       const { data, error } = await q;
-      if (error && /short_name|print_name|address|is_gift/i.test(error.message || "")) {
+      if (error && /short_name|print_name|address|is_gift|stt_locked_at|printed_at/i.test(error.message || "")) {
         const q2 = applyWarehouseOrderFilters(
           supabase
             .from("orders")
@@ -430,9 +537,10 @@ export function useWarehouseOrder(orderId: string | null) {
         .from("orders")
         .select(ORDER_SELECT)
         .eq("id", orderId!)
+        .order("stt", { referencedTable: "order_items", ascending: true })
         .single();
 
-      if (error && /short_name|print_name|address|is_gift/i.test(error.message || "")) {
+      if (error && /short_name|print_name|address|is_gift|stt_locked_at|printed_at/i.test(error.message || "")) {
         const retry = await supabase
           .from("orders")
           .select(ORDER_SELECT_BASIC.replace(", is_gift", ""))
@@ -560,11 +668,12 @@ export function useWarehouseOrderMutations() {
         }
       }
 
-      const kind = input.loaiPhieu === "DonHang" ? "DH" : "DC";
+      const kind = phieuLoaiToKind(input.loaiPhieu);
+      await assertOrderLinesFitKind(kind, valid);
 
-      // RULE: DH → kho xuất bắt buộc Q7
+      // RULE: DH/DT → kho xuất bắt buộc Q7
       let sourceWarehouseId = input.sourceWarehouseId;
-      if (kind === "DH") {
+      if (isQ7InternalKind(kind) || isQ7PhieuLoai(input.loaiPhieu)) {
         sourceWarehouseId = await resolveQ7WarehouseId();
       }
       if (!sourceWarehouseId) throw new Error("Thiếu kho xuất.");
@@ -618,8 +727,7 @@ export function useWarehouseOrderMutations() {
           order_code: orderCode,
           order_kind: kind,
           customer_name:
-            input.customerName ||
-            (kind === "DH" ? "Đơn hàng nội bộ" : "Điều chuyển nội bộ"),
+            input.customerName || orderKindCustomerName(kind),
           warehouse_id: input.destWarehouseId,
           source_warehouse_id: sourceWarehouseId,
           packing_date: inferred.win.packingDayStr,
@@ -730,7 +838,7 @@ export function useWarehouseOrderMutations() {
       void notifyWarehouseEvent({
         event: "order_created",
         soPhieu: code,
-        khoXuat: kind === "DH" ? "Q7" : "—",
+        khoXuat: isQ7InternalKind(kind) ? "Q7" : "—",
         khoNhan: "—",
         extra: `${valid.length} dòng · ${kind}`,
       });
@@ -767,7 +875,7 @@ export function useWarehouseOrderMutations() {
       if (input.destWarehouseId) patch.warehouse_id = input.destWarehouseId;
 
       if (input.sourceWarehouseId) {
-        if (ord.order_kind === "DH") {
+        if (isQ7InternalKind(ord.order_kind)) {
           patch.source_warehouse_id = await resolveQ7WarehouseId();
         } else {
           patch.source_warehouse_id = input.sourceWarehouseId;
@@ -788,6 +896,13 @@ export function useWarehouseOrderMutations() {
       }
 
       if (input.lines) {
+        await assertOrderLinesFitKind(
+          ord.order_kind || inferOrderKind(undefined),
+          input.lines.map((l) => ({
+            productSlug: l.productSlug,
+            productName: l.productName,
+          })),
+        );
         for (const line of input.lines) {
           if (line.itemId) {
             const { error } = await supabase
@@ -963,6 +1078,19 @@ export function useWarehouseOrderMutations() {
       if (!slug) throw new Error("Thiếu Mã hàng (SKU).");
       if (!name) throw new Error(`Thiếu tên hàng cho mã ${slug}.`);
 
+      const { data: host, error: hostErr } = await supabase
+        .from("orders")
+        .select("order_kind, order_code")
+        .eq("id", input.orderId)
+        .single();
+      if (hostErr) throw hostErr;
+      const hostKind =
+        (host as { order_kind?: string | null }).order_kind ||
+        inferOrderKind((host as { order_code?: string | null }).order_code);
+      await assertOrderLinesFitKind(hostKind, [
+        { productSlug: slug, productName: name },
+      ]);
+
       await revertToPendingIfProcessing(input.orderId);
 
       const productIds = await ensureProductsForOrderLines([
@@ -1122,6 +1250,7 @@ export function useWarehouseOrderMutations() {
 
   const setOrderLock = useMutation({
     mutationFn: async (input: { orderId: string; isLocked: boolean }) => {
+      if (input.isLocked) await lockOrderStt(input.orderId);
       const { error } = await supabase
         .from("orders")
         .update({
@@ -1130,6 +1259,13 @@ export function useWarehouseOrderMutations() {
         } as never)
         .eq("id", input.orderId);
       if (error) throw error;
+    },
+    onSuccess: invalidate,
+  });
+
+  const markOrderPrintedMutation = useMutation({
+    mutationFn: async (orderId: string) => {
+      await markWarehouseOrderPrinted(orderId);
     },
     onSuccess: invalidate,
   });
@@ -1394,6 +1530,7 @@ export function useWarehouseOrderMutations() {
     restoreOrder,
     setOrderStatus,
     setOrderLock,
+    markOrderPrinted: markOrderPrintedMutation,
     emergencyUnlockOrder,
   };
 }

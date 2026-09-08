@@ -186,6 +186,14 @@ function setPlan(product, industry, detail) {
   const ind = String(industry || "").slice(0, 2);
   const known = new Set(["TA", "VS", "DC", "YT", "TT", "PK", "VT", "DV"]);
   if (!known.has(ind)) return;
+  // Giữ TPCN đã chuyển sang thẻ Thuốc (YT/CN), không ghi đè lại TA/BS từ Excel.
+  if (
+    product.sku_industry === "YT" &&
+    product.sku_detail === "CN" &&
+    ind === "TA"
+  ) {
+    return;
+  }
   planned.set(product.id, {
     id: product.id,
     slug: product.slug,

@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   buildOrderInsertPayload,
   parseOrderImportMatrix,
+  phieuLoaiToKind,
   type BuildOrderInsertInput,
   type ParsedImportFile,
   type PhieuLoai,
@@ -15,6 +16,10 @@ import {
   toHoChiMinhMillis,
 } from "@/lib/packingWindows";
 import { isExcludedFromDuplicateCheck } from "@/lib/softLineValidation";
+import {
+  assertLineFitsOrderKind,
+  ORDER_KIND_MIX_MESSAGE,
+} from "@/lib/orderKindMix";
 
 export interface DuplicatePreSaveResult {
   isDuplicate: boolean;
@@ -26,10 +31,20 @@ export interface DuplicatePreSaveResult {
 }
 
 async function loadCatalog(): Promise<ProductRef[]> {
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("products")
-    .select("id, name, slug, price, unit, barcode")
+    .select(
+      "id, name, slug, price, unit, barcode, category_group, sku_industry, sku_detail",
+    )
     .limit(5000);
+  if (error && /sku_industry|sku_detail|category_group/i.test(error.message || "")) {
+    const retry = await supabase
+      .from("products")
+      .select("id, name, slug, price, unit, barcode")
+      .limit(5000);
+    data = retry.data;
+    error = retry.error;
+  }
   if (error) throw error;
   return (data as ProductRef[]) || [];
 }
@@ -228,6 +243,28 @@ export function useCommitOrderImport() {
         );
         (err as Error & { duplicate: DuplicatePreSaveResult }).duplicate = dup;
         throw err;
+      }
+
+      const kind = phieuLoaiToKind(input.loaiPhieu);
+      const catalog = await loadCatalog();
+      const bySlug = new Map(
+        catalog.map((p) => [
+          String(p.slug || "")
+            .trim()
+            .toUpperCase(),
+          p,
+        ]),
+      );
+      for (const line of input.lines) {
+        const slug = String(line.productSlug || line.maHang || "")
+          .trim()
+          .toUpperCase();
+        const hit = bySlug.get(slug) || {
+          slug: line.productSlug || line.maHang,
+          name: line.tenHang,
+        };
+        const mix = assertLineFitsOrderKind(kind, hit);
+        if (!mix.ok) throw new Error(ORDER_KIND_MIX_MESSAGE);
       }
 
       const { orderRow, itemRows, orderCode } = buildOrderInsertPayload({

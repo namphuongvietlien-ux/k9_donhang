@@ -85,7 +85,7 @@ const menuGroups: MenuGroup[] = [
     items: [
       {
         icon: FileText,
-        label: "Phiếu DH/DC",
+        label: "Phiếu DH/DT/DC",
         href: "/admin/inventory/orders",
         permission: "inventory.view",
       },

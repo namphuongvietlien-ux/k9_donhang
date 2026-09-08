@@ -21,6 +21,7 @@ export interface PrintOrderLine {
 }
 
 export interface PrintOrderDetail {
+  orderId?: string;
   soPhieu: string;
   khoXuat: string;
   khoNhan: string;
@@ -134,12 +135,12 @@ export function buildOrderPdfSheetInnerHtml(detail: PrintOrderDetail): string {
   const headerHtml = buildOrderPdfHeaderHtml(detail);
   let rowsHtml = "";
   const orderedItems = sortPrintOrderItems(detail.items || []);
-  // STT chạy liên tục theo dòng thực in ra (bỏ qua dòng SL <= 0 / dòng bị lọc)
-  let stt = 0;
+  let fallbackStt = 0;
   orderedItems.forEach((it) => {
     const sl = Number(it.sl) || 0;
     if (sl <= 0) return;
-    stt += 1;
+    fallbackStt += 1;
+    const stt = Number(it.stt) > 0 ? Number(it.stt) : fallbackStt;
     const parentCode = (it.parentSku || it.maHang || "").trim() || "—";
     const childCode = (it.maHang || "").trim();
     let variantLine = "";
@@ -293,11 +294,11 @@ export function exportOrderExcel(detail: PrintOrderDetail): void {
     ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Số lượng (Soạn)"],
   ];
   const orderedItems = sortPrintOrderItems(detail.items || []);
-  // STT chạy liên tục theo dòng thực xuất ra Excel
-  let stt = 0;
+  let fallbackStt = 0;
   orderedItems.forEach((it) => {
     if ((Number(it.sl) || 0) <= 0) return;
-    stt += 1;
+    fallbackStt += 1;
+    const stt = Number(it.stt) > 0 ? Number(it.stt) : fallbackStt;
     rows.push([
       stt,
       it.parentSku || it.maHang,
