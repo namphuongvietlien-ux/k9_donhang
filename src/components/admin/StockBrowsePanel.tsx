@@ -16,12 +16,14 @@ import {
   formatRenameCounts,
   renameProductEverywhere,
 } from "@/lib/renameProduct";
+import { matchesCatalogQuery } from "@/lib/catalogSearch";
 import {
   OTHER_INDUSTRY,
   SKU_DETAILS,
   SKU_INDUSTRIES,
   groupSortKey,
   groupTitle,
+  hvGroupsForIndustry,
   isSkuIndustryCode,
   resolveSkuGroup,
   type SkuIndustryCode,
@@ -72,6 +74,9 @@ type BrowseRow = {
   updatedAt: string | null;
   industry: string;
   detail: string;
+  hvGroup: string;
+  barcode: string;
+  barcode2: string;
   matched?: boolean;
 };
 
@@ -82,13 +87,16 @@ function fmtWhen(iso: string | null): string {
   return format(d, "dd/MM/yyyy HH:mm", { locale: vi });
 }
 
-function foldSearch(s: string): string {
-  return s
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/đ/g, "d")
-    .replace(/Đ/g, "D")
-    .toLowerCase();
+function rowMatchesQuery(r: BrowseRow, query: string): boolean {
+  return matchesCatalogQuery(
+    {
+      name: r.name,
+      slug: r.slug,
+      barcode: r.barcode,
+      barcode_2: r.barcode2,
+    },
+    query,
+  );
 }
 
 export default function StockBrowsePanel() {
@@ -149,9 +157,17 @@ export default function StockBrowsePanel() {
   const [query, setQuery] = useState("");
   const [onlyInStock, setOnlyInStock] = useState(false);
 
-  const detailOptions = industry !== "all" && isSkuIndustryCode(industry)
-    ? SKU_DETAILS[industry as SkuIndustryCode]
-    : [];
+  const detailOptions = useMemo(() => {
+    if (industry === "all" || !isSkuIndustryCode(industry)) return [];
+    const hv = hvGroupsForIndustry(industry);
+    const old = SKU_DETAILS[industry as SkuIndustryCode].filter(
+      (d) => !hv.some((h) => h.code === d.code),
+    );
+    return [
+      ...hv.map((h) => ({ code: h.code, label: `${h.code} · ${h.label}` })),
+      ...old.map((d) => ({ code: d.code, label: `${d.code} · ${d.label}` })),
+    ];
+  }, [industry]);
 
   const browseRows = useMemo((): BrowseRow[] => {
     const byProduct = new Map<string, BrowseRow[]>();
@@ -167,6 +183,9 @@ export default function StockBrowsePanel() {
         updatedAt: r.updatedAt || null,
         industry: OTHER_INDUSTRY,
         detail: "",
+        hvGroup: "",
+        barcode: r.barcode || "",
+        barcode2: r.barcode2 || "",
       };
       const list = byProduct.get(r.productId) || [];
       list.push(row);
@@ -178,13 +197,24 @@ export default function StockBrowsePanel() {
       if (!isVisibleSellableCatalog(p)) continue;
       const g = resolveSkuGroup({
         slug: p.slug,
+        name: p.name,
         sku_industry: p.sku_industry,
         sku_detail: p.sku_detail,
+        category_group: p.category_group,
       });
       const stock = byProduct.get(p.id);
       if (stock?.length) {
         for (const s of stock) {
-          out.push({ ...s, name: p.name, slug: p.slug || s.slug, industry: g.industry, detail: g.detail });
+          out.push({
+            ...s,
+            name: p.name,
+            slug: p.slug || s.slug,
+            industry: g.industry,
+            detail: g.detail,
+            hvGroup: g.hvGroup,
+            barcode: p.barcode || s.barcode,
+            barcode2: p.barcode_2 || s.barcode2,
+          });
         }
       } else {
         out.push({
@@ -197,6 +227,9 @@ export default function StockBrowsePanel() {
           updatedAt: null,
           industry: g.industry,
           detail: g.detail,
+          hvGroup: g.hvGroup,
+          barcode: p.barcode || "",
+          barcode2: p.barcode_2 || "",
         });
       }
     }
@@ -204,33 +237,40 @@ export default function StockBrowsePanel() {
   }, [products, stockRows]);
 
   const filtered = useMemo(() => {
-    const q = foldSearch(query.trim());
+    const q = query.trim();
     const base = browseRows.filter((r) => {
       if (industry !== "all" && r.industry !== industry) return false;
-      if (detail !== "all" && r.detail !== detail) return false;
+      if (
+        detail !== "all" &&
+        r.hvGroup !== detail &&
+        r.detail !== detail
+      ) {
+        return false;
+      }
       if (onlyInStock && !(r.qty > 0)) return false;
       return true;
     });
     const withMatch = q
       ? base.map((r) => ({
           ...r,
-          matched:
-            foldSearch(r.name).includes(q) || foldSearch(r.slug).includes(q),
+          matched: rowMatchesQuery(r, q),
         }))
       : base;
     const hitKeys = q
       ? new Set(
           withMatch
             .filter((r) => r.matched)
-            .map((r) => `${r.industry}|${r.detail}`),
+            .map((r) => r.hvGroup || `${r.industry}|${r.detail}`),
         )
       : null;
     const rows = hitKeys
-      ? withMatch.filter((r) => hitKeys.has(`${r.industry}|${r.detail}`))
+      ? withMatch.filter((r) =>
+          hitKeys.has(r.hvGroup || `${r.industry}|${r.detail}`),
+        )
       : withMatch;
     return rows.sort((a, b) => {
-      const gk = groupSortKey(a.industry, a.detail).localeCompare(
-        groupSortKey(b.industry, b.detail),
+      const gk = groupSortKey(a.industry, a.detail, a.hvGroup).localeCompare(
+        groupSortKey(b.industry, b.detail, b.hvGroup),
       );
       if (gk) return gk;
       return a.slug.localeCompare(b.slug, "vi");
@@ -238,15 +278,27 @@ export default function StockBrowsePanel() {
   }, [browseRows, industry, detail, query, onlyInStock]);
 
   const grouped = useMemo(() => {
-    const groups: { key: string; industry: string; detail: string; rows: BrowseRow[] }[] = [];
+    const groups: {
+      key: string;
+      industry: string;
+      detail: string;
+      hvGroup: string;
+      rows: BrowseRow[];
+    }[] = [];
     const index = new Map<string, number>();
     for (const r of filtered) {
-      const key = `${r.industry}|${r.detail}`;
+      const key = r.hvGroup || `${r.industry}|${r.detail}`;
       let i = index.get(key);
       if (i == null) {
         i = groups.length;
         index.set(key, i);
-        groups.push({ key, industry: r.industry, detail: r.detail, rows: [] });
+        groups.push({
+          key,
+          industry: r.industry,
+          detail: r.detail,
+          hvGroup: r.hvGroup,
+          rows: [],
+        });
       }
       groups[i].rows.push(r);
     }
@@ -254,10 +306,10 @@ export default function StockBrowsePanel() {
   }, [filtered]);
 
   const toPrintGroups = (
-    list: { industry: string; detail: string; rows: BrowseRow[] }[],
+    list: { industry: string; detail: string; hvGroup?: string; rows: BrowseRow[] }[],
   ) =>
     list.map((g) => ({
-      title: groupTitle(g.industry, g.detail),
+      title: groupTitle(g.industry, g.detail, g.hvGroup),
       rows: g.rows.map((r) => ({
         slug: r.slug,
         name: r.name,
@@ -269,7 +321,7 @@ export default function StockBrowsePanel() {
     }));
 
   const printGroups = (
-    list: { industry: string; detail: string; rows: BrowseRow[] }[],
+    list: { industry: string; detail: string; hvGroup?: string; rows: BrowseRow[] }[],
     subtitle?: string,
   ) => {
     printStockGroups({
@@ -423,30 +475,30 @@ export default function StockBrowsePanel() {
           </Select>
         </div>
         <div>
-          <Label className="text-xs">Nhóm chi tiết</Label>
+          <Label className="text-xs">Nhóm HV</Label>
           <Select
             value={detail}
             onValueChange={setDetail}
             disabled={industry === "all" || industry === OTHER_INDUSTRY}
           >
-            <SelectTrigger className="mt-1 h-9 w-[240px]" aria-label="Chi tiết">
+            <SelectTrigger className="mt-1 h-9 w-[280px]" aria-label="Nhóm HV">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Tất cả nhóm</SelectItem>
               {detailOptions.map((d) => (
                 <SelectItem key={d.code} value={d.code}>
-                  {d.code} · {d.label}
+                  {d.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
         <div className="min-w-[220px] flex-1">
-          <Label className="text-xs">Lọc tên / mã hàng</Label>
+          <Label className="text-xs">Tìm tên / mã / 6 số cuối vạch</Label>
           <Input
             className="mt-1 h-9"
-            placeholder="Gõ tên hoặc mã SKU…"
+            placeholder="Đúng tên, mã SKU, hoặc 6 số cuối mã vạch…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -524,9 +576,9 @@ export default function StockBrowsePanel() {
             <b>{fmtWhen(latestUpdatedAt)}</b>
           </div>
           <div className="text-muted-foreground">
-            Chi nhánh xem kho mình và Q7. Gõ tên → hiện cả nhóm chứa mã đó, rồi
-            in nhóm. Sai nhóm: Đổi nhóm. Sai tên: Đổi tên (đổi luôn trên đơn cũ
-            cùng mã hàng).
+            Chi nhánh xem kho mình và Q7. Nhóm theo mã HV 6 chữ (file
+            Ket_qua). Gõ đúng tên / mã SKU hoặc 6 số cuối mã vạch → hiện cả
+            nhóm chứa mã khớp. Sai nhóm: Đổi nhóm. Sai tên: Đổi tên.
           </div>
         </AlertDescription>
       </Alert>
@@ -583,7 +635,7 @@ export default function StockBrowsePanel() {
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           <span>
-                            {groupTitle(g.industry, g.detail)}
+                            {groupTitle(g.industry, g.detail, g.hvGroup)}
                             <span className="ml-2 font-normal text-muted-foreground">
                               ({g.rows.length})
                             </span>

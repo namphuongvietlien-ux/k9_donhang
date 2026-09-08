@@ -1,5 +1,8 @@
 /** Nhóm ngành trên catalog: thuốc (gồm vật tư y tế), hàng hóa, dịch vụ. */
 
+import { isTpcnProduct } from "@/lib/tpcnClassify";
+import { resolveSkuGroup } from "@/lib/skuGroups";
+
 export type ProductCategoryGroup = "THUOC" | "HANG_HOA" | "DICH_VU";
 
 export const SERVICE_PICK_MEDICINE_TITLE = "Không cho phép nhập dịch vụ";
@@ -18,6 +21,29 @@ export function normalizeCategoryGroup(
 
 export function isMedicineCategory(value?: string | null): boolean {
   return normalizeCategoryGroup(value) === "THUOC";
+}
+
+/** Thuốc / TPCN / vật tư y tế — dùng để tách phiếu DT vs DH. */
+export function isMedicineProduct(p: {
+  category_group?: string | null;
+  sku_industry?: string | null;
+  sku_detail?: string | null;
+  slug?: string | null;
+  name?: string | null;
+} | null | undefined): boolean {
+  if (!p) return false;
+  if (isMedicineCategory(p.category_group)) return true;
+  const industry = foldCode(p.sku_industry).replace(/[^A-Z0-9]/g, "").slice(0, 2);
+  if (industry === "YT" || industry === "VT") return true;
+  const hv = resolveSkuGroup({
+    slug: p.slug,
+    name: p.name,
+    sku_industry: p.sku_industry,
+    sku_detail: p.sku_detail,
+    category_group: p.category_group,
+  });
+  if (hv.industry === "YT" || hv.industry === "VT") return true;
+  return isTpcnProduct(p);
 }
 
 export function isServiceCategory(value?: string | null): boolean {
@@ -69,6 +95,12 @@ export function isServiceCatalogItem(p: {
 }): boolean {
   if (isMedicineCategory(p.category_group)) return false;
   if (isServiceCategory(p.category_group)) return true;
+  if (
+    resolveSkuGroup({ slug: p.slug, name: p.name, category_group: p.category_group })
+      .industry === "DV"
+  ) {
+    return true;
+  }
 
   const name = String(p.name || "")
     .normalize("NFC")

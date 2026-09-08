@@ -14,112 +14,179 @@ export interface CatalogSearchItem {
   is_out_stock?: boolean;
 }
 
-// 1. Hàm tính điểm để sắp xếp ưu tiên tìm kiếm
-export function scoreCatalogItem(item: CatalogSearchItem, query: string): number {
-  const q = (query || "").trim().toLowerCase();
-  if (!q) return 0;
-  
-  let score = 0;
-  const bc = (item.barcode || "").trim().toLowerCase();
-  const bc2 = (item.barcode_2 || "").trim().toLowerCase();
-  const slug = (item.slug || "").trim().toLowerCase();
-  const name = (item.name || "").trim().toLowerCase();
+export type CatalogMatchFields = {
+  name?: string | null;
+  slug?: string | null;
+  barcode?: string | null;
+  barcode_2?: string | null;
+};
 
-  if (bc === q || bc2 === q || slug === q) score += 100;
-  else if (/^\d{6}$/.test(q) && (bc.endsWith(q) || bc2.endsWith(q))) score += 50;
-  else if (name.includes(q)) score += 20;
-  else if (slug.includes(q)) score += 10;
-
-  return score;
+function foldSearchText(s: string): string {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-// 2. Hàm lọc danh sách Dropdown (Gợi ý khi đang gõ)
+function foldCode(s: string): string {
+  return String(s || "")
+    .trim()
+    .normalize("NFC")
+    .toUpperCase();
+}
+
+function barcodeDigits(s: string | null | undefined): string {
+  return String(s || "").replace(/\D/g, "");
+}
+
+function itemBarcodes(item: CatalogMatchFields): string[] {
+  return [barcodeDigits(item.barcode), barcodeDigits(item.barcode_2)].filter(
+    Boolean,
+  );
+}
+
+export function isSixDigitQuery(query: string): boolean {
+  return /^\d{6}$/.test((query || "").trim());
+}
+
+function preferNewerSku(a: CatalogSearchItem, b: CatalogSearchItem): number {
+  return foldCode(b.slug).length - foldCode(a.slug).length;
+}
+
+/**
+ * Điểm xếp hạng: exact mã/tên > 6 số cuối vạch > prefix vạch > tên > mã hàng.
+ * 6 số chỉ cộng điểm khi đúng đuôi barcode — không khớp giữa chuỗi.
+ */
+export function scoreCatalogItem(
+  item: CatalogMatchFields,
+  query: string,
+): number {
+  const raw = (query || "").trim();
+  if (!raw) return 0;
+
+  const qFold = foldSearchText(raw);
+  const qCode = foldCode(raw);
+  const qDigits = barcodeDigits(raw);
+  const slug = foldCode(item.slug);
+  const name = foldSearchText(item.name);
+  const codes = itemBarcodes(item);
+
+  if (codes.includes(qDigits) && qDigits.length >= 6) return 120;
+  if (qCode && slug === qCode) return 110;
+  if (qFold && name === qFold) return 100;
+
+  if (/^\d{6}$/.test(qDigits) && qDigits === raw.trim()) {
+    if (codes.some((bc) => bc.endsWith(qDigits))) return 80;
+    return 0;
+  }
+
+  if (qDigits.length >= 4 && /^\d+$/.test(raw)) {
+    if (codes.some((bc) => bc.startsWith(qDigits))) return 60;
+    if (codes.some((bc) => bc.endsWith(qDigits))) return 55;
+  }
+
+  if (qFold && name.startsWith(qFold)) return 40;
+  if (qFold && name.includes(qFold)) return 20;
+  if (qCode && slug.includes(qCode)) return 10;
+  return 0;
+}
+
+export function matchesCatalogQuery(
+  item: CatalogMatchFields,
+  query: string,
+): boolean {
+  return scoreCatalogItem(item, query) > 0;
+}
+
 export function filterCatalogSuggestions(
   items: CatalogSearchItem[],
   query: string,
-  limit: number = 12
+  limit: number = 12,
 ): CatalogSearchItem[] {
-  const q = (query || "").trim().toLowerCase();
-  if (!q) return [];
+  const raw = (query || "").trim();
+  if (!raw) return [];
 
-  // TÌM KHỚP TUYỆT ĐỐI (Gọt khoảng trắng bằng .trim())
+  const qFold = foldSearchText(raw);
+  const qCode = foldCode(raw);
+  const qDigits = barcodeDigits(raw);
+  const six = /^\d{6}$/.test(raw);
+
   const exactMatches = items.filter((p) => {
-    const bc = (p.barcode || "").trim().toLowerCase();
-    const bc2 = (p.barcode_2 || "").trim().toLowerCase();
-    const slug = (p.slug || "").trim().toLowerCase();
-    
-    return bc === q || bc2 === q || slug === q;
+    const slug = foldCode(p.slug);
+    const name = foldSearchText(p.name);
+    const codes = itemBarcodes(p);
+    if (qDigits.length >= 6 && codes.includes(qDigits)) return true;
+    if (qCode && slug === qCode) return true;
+    if (qFold && name === qFold) return true;
+    return false;
   });
 
   if (exactMatches.length > 0) {
-    // Ưu tiên mã SKU dài hơn (mã mới) lên trên cùng
-    exactMatches.sort((a, b) => (b.slug || "").length - (a.slug || "").length);
+    exactMatches.sort((a, b) => {
+      const d = scoreCatalogItem(b, raw) - scoreCatalogItem(a, raw);
+      return d !== 0 ? d : preferNewerSku(a, b);
+    });
     return exactMatches.slice(0, limit);
   }
 
-  // TÌM THEO 6 SỐ HOẶC TƯƠNG ĐỐI
-  const is6Digits = /^\d{6}$/.test(q);
-
   const results = items.filter((p) => {
-    const bc = (p.barcode || "").trim().toLowerCase();
-    const bc2 = (p.barcode_2 || "").trim().toLowerCase();
-    const slug = (p.slug || "").trim().toLowerCase();
-    const name = (p.name || "").trim().toLowerCase();
+    const slug = foldCode(p.slug);
+    const name = foldSearchText(p.name);
+    const codes = itemBarcodes(p);
 
-    if (is6Digits) {
-      return (
-        bc.endsWith(q) ||
-        bc2.endsWith(q) ||
-        slug.includes(q) ||
-        name.includes(q)
+    if (six) {
+      return codes.some((bc) => bc.endsWith(qDigits));
+    }
+
+    if (/^\d+$/.test(raw) && qDigits.length >= 4) {
+      return codes.some(
+        (bc) => bc.startsWith(qDigits) || bc.endsWith(qDigits),
       );
     }
 
     return (
-      bc.includes(q) ||
-      bc2.includes(q) ||
-      slug.includes(q) ||
-      name.includes(q)
+      (qFold && name.includes(qFold)) ||
+      (qCode && slug.includes(qCode)) ||
+      (qDigits.length >= 4 &&
+        codes.some((bc) => bc.startsWith(qDigits) || bc.endsWith(qDigits)))
     );
   });
 
   results.sort((a, b) => {
-    const scoreA = scoreCatalogItem(a, query);
-    const scoreB = scoreCatalogItem(b, query);
-    if (scoreA === scoreB) {
-      return (b.slug || "").length - (a.slug || "").length;
-    }
+    const scoreA = scoreCatalogItem(a, raw);
+    const scoreB = scoreCatalogItem(b, raw);
+    if (scoreA === scoreB) return preferNewerSku(a, b);
     return scoreB - scoreA;
   });
 
   return results.slice(0, limit);
 }
 
-// 3. Hàm chốt sản phẩm (Khi bấm Enter)
 export function resolveCatalogScan(
   items: CatalogSearchItem[],
-  query: string
+  query: string,
 ): { hit: CatalogSearchItem | null; ambiguous: boolean; skus: string[] } {
-  const q = (query || "").trim().toLowerCase();
-  if (!q) return { hit: null, ambiguous: false, skus: [] };
+  const raw = (query || "").trim();
+  if (!raw) return { hit: null, ambiguous: false, skus: [] };
 
-  const is6Digits = /^\d{6}$/.test(q);
+  const qCode = foldCode(raw);
+  const qDigits = barcodeDigits(raw);
+  const six = /^\d{6}$/.test(raw);
 
   const matches = items.filter((p) => {
-    const bc = (p.barcode || "").trim().toLowerCase();
-    const bc2 = (p.barcode_2 || "").trim().toLowerCase();
-    const slug = (p.slug || "").trim().toLowerCase();
-
-    if (is6Digits) {
-      return bc.endsWith(q) || bc2.endsWith(q) || slug === q;
-    }
-
-    return bc === q || bc2 === q || slug === q;
+    const slug = foldCode(p.slug);
+    const codes = itemBarcodes(p);
+    if (qCode && slug === qCode) return true;
+    if (qDigits.length >= 8 && codes.includes(qDigits)) return true;
+    if (six) return codes.some((bc) => bc.endsWith(qDigits));
+    return qDigits.length >= 6 && codes.includes(qDigits);
   });
 
   if (matches.length > 0) {
-    // Tự động chốt mã SKU dài nhất (mã mới) nếu có nhiều mã trùng barcode
-    matches.sort((a, b) => (b.slug || "").length - (a.slug || "").length);
+    matches.sort(preferNewerSku);
     return { hit: matches[0], ambiguous: false, skus: [matches[0].slug] };
   }
 

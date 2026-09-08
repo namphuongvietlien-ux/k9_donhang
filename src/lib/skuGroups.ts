@@ -1,7 +1,11 @@
 /**
- * Phân nhóm SKU theo từ điển file SKU_moi_10_ky_tu.xlsx
- * Cấu trúc: [2 ngành][2 chi tiết][2 đối tượng][4 số]
+ * Phân nhóm SKU:
+ * - HV 10 ký tự (Ket_qua): [1 loài C/M/H][2 nhóm HH][3 quy cách][4 số]
+ * - Cũ: [2 ngành][2 chi tiết][2 đối tượng][4 số]
  */
+
+import { needsTpcnThuocMove } from "@/lib/tpcnClassify";
+import { HV_GROUPS, type HvIndustryCode } from "@/lib/skuHvGroups";
 
 export type SkuIndustryCode =
   | "TA"
@@ -58,6 +62,7 @@ export const SKU_DETAILS: Record<SkuIndustryCode, { code: string; label: string 
   ],
   YT: [
     { code: "TH", label: "Thuốc hỗ trợ / điều trị" },
+    { code: "CN", label: "Thực phẩm chức năng / TPCN" },
     { code: "GI", label: "Trị giun / ve / bọ chét" },
     { code: "NA", label: "Trị nấm" },
     { code: "VI", label: "Kháng viêm / giảm đau" },
@@ -143,41 +148,136 @@ export function detailLabel(industry?: string | null, detail?: string | null): s
 export type ResolvedSkuGroup = {
   industry: string;
   detail: string;
+  /** 6 chữ HV (CTPCHI, MCAXXX…) — rỗng nếu không phải mã HV */
+  hvGroup: string;
 };
 
-/** Ưu tiên cột DB; không có thì đọc 10 ký tự trên slug. */
-export function resolveSkuGroup(input: {
-  slug?: string | null;
-  sku_industry?: string | null;
-  sku_detail?: string | null;
-}): ResolvedSkuGroup {
-  const industry = foldSkuCode(input.sku_industry).slice(0, 2);
-  const detail = foldSkuCode(input.sku_detail).slice(0, 2);
-  if (industry) {
-    if (!isSkuIndustryCode(industry)) {
-      return { industry: OTHER_INDUSTRY, detail: "" };
-    }
-    return { industry, detail };
+const HV_SKU_RE =
+  /^([CMH])([A-Z\u0110]{2})([A-Z\u0110]{3})(\d{4})$/i;
+
+function hvMerchToIndustry(merch: string, spec: string): HvIndustryCode {
+  const m = merch.toUpperCase();
+  const s = spec.toUpperCase();
+  if (m === "TP") return "TA";
+  if (m === "CN") return "YT";
+  if (m === "CA" || m === "VS") return "VS";
+  if (m === "ĐC") return "DC";
+  if (m === "DC") return "PK";
+  if (m === "PK") {
+    if (s === "AQU" || s === "TTR" || s === "GIY") return "TT";
+    return "PK";
   }
-  const slug = foldSkuCode(input.slug);
-  if (/^[A-Z]{6}\d{4}$/.test(slug)) {
-    return { industry: slug.slice(0, 2), detail: slug.slice(2, 4) };
-  }
-  return { industry: OTHER_INDUSTRY, detail: "" };
+  if (m === "VC") return "PK";
+  if (m === "ĐT" || m === "DT") return "YT";
+  if (m === "VT") return "VT";
+  if (m === "DV") return "DV";
+  return "KHAC";
 }
 
-export function groupTitle(industry: string, detail: string): string {
+/** Giữ chữ Đ (đồ chơi / điều trị) — không gộp với D (dụng cụ). */
+export function parseHvSku(slug?: string | null): {
+  group6: string;
+  species: string;
+  merch: string;
+  spec: string;
+} | null {
+  const raw = String(slug || "")
+    .trim()
+    .normalize("NFC")
+    .toUpperCase();
+  const m = raw.match(HV_SKU_RE);
+  if (!m) return null;
+  return {
+    group6: `${m[1]}${m[2]}${m[3]}`.toUpperCase(),
+    species: m[1].toUpperCase(),
+    merch: m[2].toUpperCase(),
+    spec: m[3].toUpperCase(),
+  };
+}
+
+export function hvGroupMeta(group6?: string | null) {
+  if (!group6) return null;
+  return HV_GROUPS[group6] || null;
+}
+
+export function hvGroupsForIndustry(industry: string): {
+  code: string;
+  label: string;
+}[] {
+  return Object.entries(HV_GROUPS)
+    .filter(([, meta]) => meta.industry === industry)
+    .map(([code, meta]) => ({ code, label: meta.title }))
+    .sort((a, b) => a.code.localeCompare(b.code, "vi"));
+}
+
+/** Ưu tiên cột DB hợp lệ; không thì đọc SKU HV 10 ký tự (Ket_qua), rồi schema cũ. */
+export function resolveSkuGroup(input: {
+  slug?: string | null;
+  name?: string | null;
+  sku_industry?: string | null;
+  sku_detail?: string | null;
+  category_group?: string | null;
+}): ResolvedSkuGroup {
+  const hv = parseHvSku(input.slug);
+  const hvGroup = hv?.group6 || "";
+
+  if (needsTpcnThuocMove(input)) {
+    return { industry: "YT", detail: "CN", hvGroup };
+  }
+
+  const industry = foldSkuCode(input.sku_industry).slice(0, 2);
+  const detail = foldSkuCode(input.sku_detail).slice(0, 2);
+  if (industry && isSkuIndustryCode(industry)) {
+    return { industry, detail, hvGroup };
+  }
+
+  if (hv) {
+    const meta = hvGroupMeta(hv.group6);
+    const mapped = meta?.industry || hvMerchToIndustry(hv.merch, hv.spec);
+    return {
+      industry: mapped === "KHAC" || !isSkuIndustryCode(mapped) ? OTHER_INDUSTRY : mapped,
+      detail: hv.spec,
+      hvGroup: hv.group6,
+    };
+  }
+
+  const slug = foldSkuCode(input.slug);
+  if (/^[A-Z]{6}\d{4}$/.test(slug)) {
+    const ind = slug.slice(0, 2);
+    const det = slug.slice(2, 4);
+    if (isSkuIndustryCode(ind)) {
+      return { industry: ind, detail: det, hvGroup: "" };
+    }
+  }
+  return { industry: OTHER_INDUSTRY, detail: "", hvGroup: "" };
+}
+
+export function groupTitle(
+  industry: string,
+  detail: string,
+  hvGroup?: string,
+): string {
+  if (hvGroup) {
+    const meta = hvGroupMeta(hvGroup);
+    if (meta?.title) return `${hvGroup} · ${meta.title}`;
+    return hvGroup;
+  }
   if (industry === OTHER_INDUSTRY || !industry) return "Khác";
   const head = `${industry} · ${industryLabel(industry)}`;
   if (!detail) return head;
   return `${head}  →  ${detail} · ${detailLabel(industry, detail)}`;
 }
 
-export function groupSortKey(industry: string, detail: string): string {
+export function groupSortKey(
+  industry: string,
+  detail: string,
+  hvGroup?: string,
+): string {
   const indIdx = SKU_INDUSTRIES.findIndex((i) => i.code === industry);
   const indOrder = indIdx < 0 ? 99 : indIdx;
+  const extra = hvGroup || detail || "";
   const details = isSkuIndustryCode(industry) ? SKU_DETAILS[industry] : [];
   const detIdx = details.findIndex((d) => d.code === detail);
-  const detOrder = detIdx < 0 ? 99 : detIdx;
-  return `${String(indOrder).padStart(2, "0")}-${industry}-${String(detOrder).padStart(2, "0")}-${detail}`;
+  const detOrder = hvGroup ? 0 : detIdx < 0 ? 99 : detIdx;
+  return `${String(indOrder).padStart(2, "0")}-${industry}-${String(detOrder).padStart(2, "0")}-${extra}`;
 }
