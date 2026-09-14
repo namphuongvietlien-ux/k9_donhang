@@ -174,7 +174,10 @@ function hvMerchToIndustry(merch: string, spec: string): HvIndustryCode {
   return "KHAC";
 }
 
-/** Giữ chữ Đ (đồ chơi / điều trị) — không gộp với D (dụng cụ). */
+/**
+ * Giữ chữ Đ (đồ chơi / điều trị) — không gộp với D (dụng cụ).
+ * Mã biến thể `HPKAQU1026-01` / `HPKAQU1026_S` → đọc phần gốc trước dấu `-` / `_`.
+ */
 export function parseHvSku(slug?: string | null): {
   group6: string;
   species: string;
@@ -184,7 +187,8 @@ export function parseHvSku(slug?: string | null): {
   const raw = String(slug || "")
     .trim()
     .normalize("NFC")
-    .toUpperCase();
+    .toUpperCase()
+    .split(/[-_/\s]/)[0];
   const m = raw.match(HV_SKU_RE);
   if (!m) return null;
   return {
