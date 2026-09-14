@@ -2,6 +2,7 @@
 
 import { isTpcnProduct } from "@/lib/tpcnClassify";
 import { resolveSkuGroup } from "@/lib/skuGroups";
+import { classifySkuByConvention } from "@/lib/skuConvention";
 
 export type ProductCategoryGroup = "THUOC" | "HANG_HOA" | "DICH_VU";
 
@@ -23,7 +24,11 @@ export function isMedicineCategory(value?: string | null): boolean {
   return normalizeCategoryGroup(value) === "THUOC";
 }
 
-/** Thuốc / TPCN / vật tư y tế — dùng để tách phiếu DT vs DH. */
+/**
+ * Thuốc / TPCN — dùng để tách phiếu DT vs DH.
+ * Quy ước: chỉ ngành YT (điều trị, TPCN, vắc xin) là thuốc; VT vật tư và các ngành
+ * còn lại là hàng hóa.
+ */
 export function isMedicineProduct(p: {
   category_group?: string | null;
   sku_industry?: string | null;
@@ -34,7 +39,7 @@ export function isMedicineProduct(p: {
   if (!p) return false;
   if (isMedicineCategory(p.category_group)) return true;
   const industry = foldCode(p.sku_industry).replace(/[^A-Z0-9]/g, "").slice(0, 2);
-  if (industry === "YT" || industry === "VT") return true;
+  if (industry === "YT") return true;
   const hv = resolveSkuGroup({
     slug: p.slug,
     name: p.name,
@@ -42,7 +47,9 @@ export function isMedicineProduct(p: {
     sku_detail: p.sku_detail,
     category_group: p.category_group,
   });
-  if (hv.industry === "YT" || hv.industry === "VT") return true;
+  if (hv.industry === "YT") return true;
+  // Mã ngắn (THT, TCN, TGV, TKS…) / nhóm HV theo quy ước SKU_mapping_HV
+  if (classifySkuByConvention(p.slug).categoryGroup === "THUOC") return true;
   if (isVaccineOrVetDrugByText(p)) return true;
   return isTpcnProduct(p);
 }

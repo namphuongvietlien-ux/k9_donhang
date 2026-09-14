@@ -55,6 +55,13 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { normalizeOrderCodeText } from "@/lib/packingWindows";
+import {
+  categoryGroupLabel,
+  classifySkuByConvention,
+  conventionGapsToCsv,
+  conventionStatusLabel,
+  findConventionGaps,
+} from "@/lib/skuConvention";
 
 import { useStoreScope } from "@/hooks/useStoreScope";
 
@@ -236,6 +243,36 @@ export default function CatalogStockImport({
   const misa = parsed?.layout === "misaSummary";
 
   const previewLines = useMemo(() => parsed?.lines.slice(0, 80) ?? [], [parsed]);
+
+  /** Phân loại theo quy ước mã SKU — thống kê nhóm hàng + mã cần bổ sung quy ước */
+  const conventionStats = useMemo(() => {
+    const counts: Record<string, number> = {};
+    const seen = new Set<string>();
+    const rows: { sku: string; name: string }[] = [];
+    for (const l of parsed?.lines ?? []) {
+      if (l.errorNote) continue;
+      const sku = (l.productSlug || l.maHang || "").trim();
+      if (!sku) continue;
+      const key = normalizeOrderCodeText(sku);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({ sku, name: l.tenHang });
+      const label = categoryGroupLabel(classifySkuByConvention(sku).categoryGroup);
+      counts[label] = (counts[label] || 0) + 1;
+    }
+    return { counts, gaps: findConventionGaps(rows) };
+  }, [parsed]);
+
+  const downloadConventionGaps = () => {
+    const csv = "\ufeff" + conventionGapsToCsv(conventionStats.gaps);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ma-can-bo-sung-quy-uoc-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const toggleNewProduct = (key: string, checked: boolean) => {
     setNewProductSelection((prev) => ({ ...prev, [key]: checked }));
@@ -441,7 +478,58 @@ export default function CatalogStockImport({
               {misa && parsed.skippedTotals > 0 && (
                 <Badge variant="outline">Bỏ {parsed.skippedTotals} dòng tổng</Badge>
               )}
+              {Object.entries(conventionStats.counts).map(([label, n]) => (
+                <Badge
+                  key={label}
+                  variant="outline"
+                  className={cn(
+                    label === "Thuốc" && "border-sky-300 bg-sky-50 text-sky-900",
+                    label === "Hàng hóa" && "border-emerald-300 bg-emerald-50 text-emerald-900",
+                    label === "Dịch vụ" && "border-violet-300 bg-violet-50 text-violet-900",
+                    label === "Chưa rõ" && "border-amber-300 bg-amber-50 text-amber-900",
+                  )}
+                  title="Nhóm hàng suy ra từ quy ước mã SKU (SKU_mapping_HV_10ky_tu_v2)"
+                >
+                  {label}: {n}
+                </Badge>
+              ))}
             </div>
+
+            {conventionStats.gaps.length > 0 && (
+              <Alert className="border-amber-300 bg-amber-50/70" data-testid="convention-gaps">
+                <AlertTitle>
+                  {conventionStats.gaps.reduce((s, g) => s + g.count, 0)} mã thuộc{" "}
+                  {conventionStats.gaps.length} nhóm / tiền tố chưa có trong quy ước đặt mã
+                </AlertTitle>
+                <AlertDescription className="space-y-2 text-sm">
+                  <p className="text-xs text-muted-foreground">
+                    Vẫn import được (nhóm hàng tạm suy từ nhóm HH / tiền tố). Tải CSV để bổ sung
+                    vào sheet <code>Ket_qua</code> / <code>Quy_tac_HV</code> của
+                    SKU_mapping_HV_10ky_tu_v2.xlsx.
+                  </p>
+                  <ul className="grid gap-1 sm:grid-cols-2 text-xs">
+                    {conventionStats.gaps.slice(0, 12).map((g) => (
+                      <li key={g.key} className="flex items-baseline gap-2">
+                        <code className="font-mono font-semibold">{g.key}</code>
+                        <span className="tabular-nums">×{g.count}</span>
+                        <span className="text-muted-foreground truncate">
+                          {conventionStatusLabel(g.status)} → {categoryGroupLabel(g.categoryGroup)}
+                        </span>
+                      </li>
+                    ))}
+                    {conventionStats.gaps.length > 12 && (
+                      <li className="text-muted-foreground">
+                        … và {conventionStats.gaps.length - 12} nhóm khác (xem CSV)
+                      </li>
+                    )}
+                  </ul>
+                  <Button type="button" size="sm" variant="outline" onClick={downloadConventionGaps}>
+                    <Download className="w-3.5 h-3.5 mr-1.5" />
+                    Tải CSV mã cần bổ sung quy ước
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            )}
 
             <div className="rounded-md border overflow-x-auto max-h-80">
               <Table>
@@ -452,6 +540,7 @@ export default function CatalogStockImport({
                     <TableHead>Mã vạch</TableHead>
                     <TableHead>Tên</TableHead>
                     <TableHead>ĐVT</TableHead>
+                    <TableHead>Nhóm</TableHead>
                     {mode === "stockQ7" && (
                       <TableHead className="text-right">Cuối kỳ</TableHead>
                     )}
@@ -485,6 +574,32 @@ export default function CatalogStockImport({
                         {l.tenHang}
                       </TableCell>
                       <TableCell>{l.dvt || "—"}</TableCell>
+                      <TableCell className="text-xs whitespace-nowrap">
+                        {(() => {
+                          const c = classifySkuByConvention(l.productSlug || l.maHang);
+                          return (
+                            <span
+                              className={cn(
+                                c.categoryGroup === "THUOC" && "text-sky-800",
+                                c.categoryGroup === "HANG_HOA" && "text-emerald-800",
+                                c.categoryGroup === "DICH_VU" && "text-violet-800",
+                                !c.categoryGroup && "text-amber-700",
+                              )}
+                              title={`${conventionStatusLabel(c.status)}${c.groupTitle ? ` · ${c.groupTitle}` : ""}`}
+                            >
+                              {categoryGroupLabel(c.categoryGroup)}
+                              {c.hvGroup ? (
+                                <span className="ml-1 font-mono text-muted-foreground">{c.hvGroup}</span>
+                              ) : null}
+                              {c.needsConventionUpdate ? (
+                                <span className="ml-1 text-amber-700" title="Chưa có trong quy ước">
+                                  ⚠
+                                </span>
+                              ) : null}
+                            </span>
+                          );
+                        })()}
+                      </TableCell>
                       {mode === "stockQ7" && (
                         <TableCell className="text-right tabular-nums">
                           {l.tonKho ?? "—"}

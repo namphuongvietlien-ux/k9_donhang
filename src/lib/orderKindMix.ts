@@ -4,6 +4,7 @@
 
 import { isMedicineProduct } from "@/lib/productCategory";
 import { OTHER_INDUSTRY, resolveSkuGroup } from "@/lib/skuGroups";
+import { classifySkuByConvention } from "@/lib/skuConvention";
 import { phieuLoaiToKind, type PhieuLoai } from "@/lib/importOrders";
 import type { OrderKind } from "@/lib/warehouseOrders";
 
@@ -20,14 +21,16 @@ export type MixProductHint = {
 
 /**
  * Có đủ dữ liệu để biết mã là thuốc hay hàng hóa không?
- * Ngoài category_group / sku_industry, mã HV 10 ký tự (vd. MTPCHI1076 → TA thức ăn)
- * cũng tự suy ra ngành từ slug — không có tín hiệu nào thì cho phép mọi loại phiếu.
+ * Ngoài category_group / sku_industry, mã HV 10 ký tự (MTPCHI1076 → TA) và mã ngắn theo
+ * bảng ánh xạ (TAM1001 → MTPCHI, TCN2011 → HĐTTHT) cũng suy ra được ngành từ slug —
+ * không có tín hiệu nào thì cho phép mọi loại phiếu.
  */
 function hasCategorySignal(p: MixProductHint | null | undefined): boolean {
   if (!p) return false;
   if (String(p.category_group || "").trim()) return true;
   if (String(p.sku_industry || "").trim()) return true;
   if (isMedicineProduct(p)) return true;
+  if (classifySkuByConvention(p.slug).categoryGroup) return true;
   const group = resolveSkuGroup({
     slug: p.slug,
     name: p.name,
