@@ -507,6 +507,17 @@ export default function CatalogStockImport({
               {misa && parsed.skippedTotals > 0 && (
                 <Badge variant="outline">Bỏ {parsed.skippedTotals} dòng tổng</Badge>
               )}
+              {parsed.skippedUnknownStore > 0 && (
+                <Badge variant="outline" className="border-amber-400 text-amber-800">
+                  Bỏ {parsed.skippedUnknownStore} dòng không nhận ra cửa hàng
+                </Badge>
+              )}
+              {parsed.skippedJunk > 0 && (
+                <Badge variant="outline">Bỏ {parsed.skippedJunk} dòng tổng công ty / tiêu đề lặp</Badge>
+              )}
+              {parsed.skippedEmpty > 0 && (
+                <Badge variant="outline">Bỏ {parsed.skippedEmpty} dòng trống mã</Badge>
+              )}
               {Object.entries(conventionStats.counts).map(([label, n]) => (
                 <Badge
                   key={label}
@@ -523,6 +534,81 @@ export default function CatalogStockImport({
                 </Badge>
               ))}
             </div>
+
+            {parsed.validCount === 0 && (
+              <Alert variant="destructive" data-testid="parse-diagnostics">
+                <AlertTitle>
+                  File đọc được nhưng không có dòng hợp lệ — chẩn đoán cấu trúc
+                </AlertTitle>
+                <AlertDescription className="space-y-2 text-xs">
+                  <div>
+                    Layout nhận dạng:{" "}
+                    <strong>{misa ? "TỔNG HỢP TỒN KHO (MISA, theo Cửa hàng)" : "File 1 kho"}</strong>{" "}
+                    · Dòng tiêu đề: <strong>#{parsed.diagnostics.headerRowNumber}</strong>{" "}
+                    <span className="font-mono">
+                      [{parsed.diagnostics.headerCells.join(" | ")}]
+                    </span>
+                  </div>
+                  <div>
+                    Cột đã ánh xạ:{" "}
+                    {Object.entries(parsed.diagnostics.mappedColumns).map(([role, label]) => (
+                      <span key={role} className="mr-2">
+                        <strong>{role}</strong> ← <span className="font-mono">{label}</span>
+                      </span>
+                    ))}
+                  </div>
+                  <div>
+                    Bỏ qua: {parsed.skippedJunk} dòng tổng công ty / tiêu đề lặp ·{" "}
+                    {parsed.skippedEmpty} dòng trống mã · {parsed.skippedTotals} dòng tổng
+                    (không có cửa hàng) · {parsed.skippedUnknownStore} dòng không nhận ra cửa hàng
+                    · {parsed.lines.length} dòng đọc được nhưng lỗi
+                  </div>
+                  {parsed.diagnostics.unknownStores.length > 0 && (
+                    <div>
+                      Cửa hàng không ánh xạ được sang kho:{" "}
+                      <span className="font-mono">
+                        {parsed.diagnostics.unknownStores.join("; ")}
+                      </span>{" "}
+                      → gửi tên này để bổ sung bảng ánh xạ cửa hàng → kho.
+                    </div>
+                  )}
+                  {parsed.diagnostics.sampleSkips.length > 0 && (
+                    <div>
+                      Lý do loại (dòng đầu):{" "}
+                      {parsed.diagnostics.sampleSkips
+                        .map((s) => `#${s.row} ${s.reason}`)
+                        .join(" · ")}
+                    </div>
+                  )}
+                  {parsed.lines.length > 0 && (
+                    <div>
+                      Lỗi trên dòng đọc được:{" "}
+                      {Object.entries(
+                        parsed.lines.reduce<Record<string, number>>((acc, l) => {
+                          if (l.errorNote) acc[l.errorNote] = (acc[l.errorNote] || 0) + 1;
+                          return acc;
+                        }, {}),
+                      )
+                        .map(([k, v]) => `${k} (${v})`)
+                        .join(" · ")}
+                    </div>
+                  )}
+                  <div>
+                    5 dòng dữ liệu đầu trong file:
+                    <pre className="mt-1 max-h-40 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] leading-snug">
+                      {parsed.diagnostics.sampleRows
+                        .map((r) => r.join(" | "))
+                        .join("\n")}
+                    </pre>
+                  </div>
+                  <div className="text-muted-foreground">
+                    Cấu trúc chờ đợi — MISA: Tên hàng hóa | Mã hàng hóa | Đơn vị tính | … | Cuối kỳ |
+                    Cửa hàng (dòng sản phẩm không có Cửa hàng, dòng bên dưới mỗi cửa hàng một dòng).
+                    File 1 kho: Mã hàng | Mã vạch | Tên hàng | ĐVT | Tồn kho.
+                  </div>
+                </AlertDescription>
+              </Alert>
+            )}
 
             {conventionStats.gaps.length > 0 && (
               <Alert className="border-amber-300 bg-amber-50/70" data-testid="convention-gaps">
