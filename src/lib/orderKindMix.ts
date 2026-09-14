@@ -3,6 +3,7 @@
  */
 
 import { isMedicineProduct } from "@/lib/productCategory";
+import { OTHER_INDUSTRY, resolveSkuGroup } from "@/lib/skuGroups";
 import { phieuLoaiToKind, type PhieuLoai } from "@/lib/importOrders";
 import type { OrderKind } from "@/lib/warehouseOrders";
 
@@ -17,11 +18,24 @@ export type MixProductHint = {
   name?: string | null;
 };
 
+/**
+ * Có đủ dữ liệu để biết mã là thuốc hay hàng hóa không?
+ * Ngoài category_group / sku_industry, mã HV 10 ký tự (vd. MTPCHI1076 → TA thức ăn)
+ * cũng tự suy ra ngành từ slug — không có tín hiệu nào thì cho phép mọi loại phiếu.
+ */
 function hasCategorySignal(p: MixProductHint | null | undefined): boolean {
   if (!p) return false;
   if (String(p.category_group || "").trim()) return true;
   if (String(p.sku_industry || "").trim()) return true;
-  return isMedicineProduct(p);
+  if (isMedicineProduct(p)) return true;
+  const group = resolveSkuGroup({
+    slug: p.slug,
+    name: p.name,
+    sku_industry: p.sku_industry,
+    sku_detail: p.sku_detail,
+    category_group: p.category_group,
+  });
+  return !!group.industry && group.industry !== OTHER_INDUSTRY;
 }
 
 export function lineFitsOrderKind(

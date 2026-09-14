@@ -43,7 +43,27 @@ export function isMedicineProduct(p: {
     category_group: p.category_group,
   });
   if (hv.industry === "YT" || hv.industry === "VT") return true;
+  if (isVaccineOrVetDrugByText(p)) return true;
   return isTpcnProduct(p);
+}
+
+/**
+ * Vắc xin / thuốc thú y nhận diện theo mã & tên (cùng quy tắc với bot nhắc vaccine
+ * và scripts/update-product-category-group.mjs) — dùng khi catalog chưa gán nhóm.
+ */
+export function isVaccineOrVetDrugByText(p: {
+  slug?: string | null;
+  name?: string | null;
+}): boolean {
+  const slug = foldCode(p.slug);
+  if (/^VAC/.test(slug)) return true;
+  const name = String(p.name || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .toLowerCase();
+  return /\bvac\s*-?\s*xin\b|\bvaccine\b|\bthuoc thu y\b/.test(name);
 }
 
 export function isServiceCategory(value?: string | null): boolean {
