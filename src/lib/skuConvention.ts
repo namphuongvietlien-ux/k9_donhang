@@ -142,8 +142,10 @@ export type SkuConventionStatus =
   | "hv-unknown-group"
   /** Mã HV nhưng ký tự 2–3 không phải nhóm hàng hóa hợp lệ (có thể đã tạm xếp ngành) */
   | "hv-invalid-merch"
-  /** Mã ngắn có trong bảng ánh xạ */
+  /** Mã ngắn có trong bảng ánh xạ của sheet Quy_tac_HV */
   | "short"
+  /** Mã ngắn ánh xạ tạm từ danh mục (chưa có trong Quy_tac_HV) → cần đưa vào quy ước */
+  | "short-proposed"
   /** Mã ngắn chưa có trong bảng ánh xạ → cần bổ sung */
   | "short-unknown"
   /** Mã cũ [2 ngành][2 chi tiết][2 đối tượng][4 số] */
@@ -302,9 +304,11 @@ export function classifySkuByConvention(slug?: string | null): SkuClassification
       const prefix = SHORT_CODE_MAP[`${sc.letters}${sc.firstDigit}`]
         ? `${sc.letters}${sc.firstDigit}`
         : sc.letters;
+      const status: SkuConventionStatus =
+        rule.source === "quy_tac" ? "short" : "short-proposed";
       if (rule.group) {
         return fromGroup(
-          "short",
+          status,
           rule.group,
           prefix,
           rule.title,
@@ -315,7 +319,7 @@ export function classifySkuByConvention(slug?: string | null): SkuClassification
       }
       const industry = rule.industry || "KHAC";
       return {
-        status: "short",
+        status,
         hvGroup: "",
         groupTitle: rule.title,
         shortPrefix: prefix,
@@ -395,7 +399,9 @@ export function conventionStatusLabel(status: SkuConventionStatus): string {
     case "hv-invalid-merch":
       return "Nhóm HH (ký tự 2–3) ngoài quy ước";
     case "short":
-      return "Mã ngắn (đã ánh xạ)";
+      return "Mã ngắn (Quy_tac_HV)";
+    case "short-proposed":
+      return "Mã ngắn mới — tạm ánh xạ, cần đưa vào Quy_tac_HV";
     case "short-unknown":
       return "Tiền tố mã ngắn chưa có ánh xạ";
     case "legacy":
@@ -417,7 +423,7 @@ export function findConventionGaps(
   for (const r of rows) {
     const c = classifySkuByConvention(r.sku);
     if (!c.needsConventionUpdate) continue;
-    const key = c.hvGroup && c.status !== "short" ? c.hvGroup : c.shortPrefix || c.hvGroup;
+    const key = c.shortPrefix || c.hvGroup;
     if (!key) continue;
     let gap = map.get(key);
     if (!gap) {

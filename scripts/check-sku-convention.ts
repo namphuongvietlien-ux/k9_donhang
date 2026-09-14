@@ -111,6 +111,7 @@ const byStatus: Record<SkuConventionStatus, number> = {
   "hv-unknown-group": 0,
   "hv-invalid-merch": 0,
   short: 0,
+  "short-proposed": 0,
   "short-unknown": 0,
   legacy: 0,
   other: 0,
@@ -131,7 +132,8 @@ console.log(`\n== ${rows.length} mã gốc (đã gom biến thể)`);
 console.log(`  Đúng quy ước HV            : ${byStatus.hv}`);
 console.log(`  HV nhưng nhóm chưa có      : ${byStatus["hv-unknown-group"]}`);
 console.log(`  HV nhưng nhóm HH ngoài QU  : ${byStatus["hv-invalid-merch"]}`);
-console.log(`  Mã ngắn đã ánh xạ          : ${byStatus.short}`);
+console.log(`  Mã ngắn (Quy_tac_HV)       : ${byStatus.short}`);
+console.log(`  Mã ngắn mới (tạm ánh xạ)   : ${byStatus["short-proposed"]}`);
 console.log(`  Mã ngắn chưa có ánh xạ     : ${byStatus["short-unknown"]}`);
 console.log(`  Mã cũ 2+2+2+4              : ${byStatus.legacy}`);
 console.log(`  Không theo quy ước         : ${byStatus.other}`);
