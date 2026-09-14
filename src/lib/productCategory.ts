@@ -1,6 +1,5 @@
-/** Nhóm ngành trên catalog: thuốc (gồm vật tư y tế), hàng hóa, dịch vụ. */
+/** Nhóm ngành trên catalog: chỉ YT là thuốc, còn lại là hàng hóa; dịch vụ riêng. */
 
-import { isTpcnProduct } from "@/lib/tpcnClassify";
 import { resolveSkuGroup } from "@/lib/skuGroups";
 
 export type ProductCategoryGroup = "THUOC" | "HANG_HOA" | "DICH_VU";
@@ -23,7 +22,10 @@ export function isMedicineCategory(value?: string | null): boolean {
   return normalizeCategoryGroup(value) === "THUOC";
 }
 
-/** Thuốc / TPCN / vật tư y tế — dùng để tách phiếu DT vs DH. */
+/**
+ * Chỉ ngành Y tế (YT = y tế / thuốc) mới là thuốc — dùng để tách phiếu DT vs DH.
+ * Mọi hàng hóa còn lại (kể cả vật tư y tế VT) đều là hàng hóa.
+ */
 export function isMedicineProduct(p: {
   category_group?: string | null;
   sku_industry?: string | null;
@@ -32,19 +34,21 @@ export function isMedicineProduct(p: {
   name?: string | null;
 } | null | undefined): boolean {
   if (!p) return false;
-  if (isMedicineCategory(p.category_group)) return true;
+  // Nhóm đã gán trong DB là nguồn đúng: chỉ THUOC mới là thuốc, còn lại là hàng.
+  const group = normalizeCategoryGroup(p.category_group);
+  if (group) return group === "THUOC";
+  // Chưa gán nhóm → suy ra từ SKU: chỉ ngành YT mới là thuốc.
   const industry = foldCode(p.sku_industry).replace(/[^A-Z0-9]/g, "").slice(0, 2);
-  if (industry === "YT" || industry === "VT") return true;
-  const hv = resolveSkuGroup({
-    slug: p.slug,
-    name: p.name,
-    sku_industry: p.sku_industry,
-    sku_detail: p.sku_detail,
-    category_group: p.category_group,
-  });
-  if (hv.industry === "YT" || hv.industry === "VT") return true;
-  if (isVaccineOrVetDrugByText(p)) return true;
-  return isTpcnProduct(p);
+  if (industry === "YT") return true;
+  return (
+    resolveSkuGroup({
+      slug: p.slug,
+      name: p.name,
+      sku_industry: p.sku_industry,
+      sku_detail: p.sku_detail,
+      category_group: p.category_group,
+    }).industry === "YT"
+  );
 }
 
 /**

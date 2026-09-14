@@ -5,10 +5,10 @@
  *   node scripts/update-product-category-group.mjs --apply
  *   node scripts/update-product-category-group.mjs --file="D:\danhmucsanpham\SKU_moi_10_ky_tu.xlsx" --apply
  *
- * Phân nhóm:
- *   THUOC     — YT (thuốc) + VT (vật tư y tế) + mã thuốc bắt buộc / heuristic
+ * Phân nhóm (chỉ YT là thuốc):
+ *   THUOC     — chỉ ngành YT (y tế / thuốc)
  *   DICH_VU   — ngành DV (không cho nhập vào phiếu)
- *   HANG_HOA  — TA, VS, PK, TT, DC và mọi mã còn lại
+ *   HANG_HOA  — VT (vật tư y tế), TA, VS, PK, TT, DC và mọi mã còn lại
  *
  * Ẩn (is_active=false): mã vạch/slug trùng name và name không phải dạng chữ.
  *
@@ -27,38 +27,6 @@ const fileArg = args.find((a) => a.startsWith("--file="));
 const DEFAULT_XLSX = path.join("D:", "danhmucsanpham", "SKU_moi_10_ky_tu.xlsx");
 const SRC = fileArg ? fileArg.slice("--file=".length) : DEFAULT_XLSX;
 const CHUNK = 200;
-
-/** Thuốc bắt buộc (kể cả slug có dấu / không dấu). */
-const FORCE_THUOC = [
-  "CĐTTGV1007",
-  "CDTTGV1007",
-  "HĐTHTR2012",
-  "HDTHTR2012",
-  "IT13V01",
-  "IT23V01",
-  "IT23V02",
-  "MTH1001",
-  "R01",
-  "PC51O01",
-  "PD51O01",
-];
-
-const THUOC_PREFIXES = [
-  "TGV",
-  "VAC",
-  "TKS",
-  "HVTK",
-  "HVTXNC",
-  "MTH",
-  "CDTTGV",
-  "HDTHTR",
-  "HDTTKS",
-  "IT13",
-  "IT23",
-  "HCN",
-  "MCN",
-  "CCN",
-];
 
 function loadEnv() {
   for (const name of [".env", ".env.local"]) {
@@ -117,7 +85,8 @@ function isGarbageAlias(p) {
 function classifyExcel(industryCode, industryName) {
   const code = foldCode(industryCode);
   const name = String(industryName ?? "").normalize("NFC").trim().toLowerCase();
-  if (code === "YT" || code === "VT") return "THUOC";
+  // Chỉ ngành YT (y tế / thuốc) là THUOC; VT vật tư y tế nay là hàng hóa.
+  if (code === "YT") return "THUOC";
   if (code === "DV") return "DICH_VU";
   if (
     name.includes("dịch vụ") ||
@@ -130,28 +99,11 @@ function classifyExcel(industryCode, industryName) {
     name.includes("y tế") ||
     name.includes("y te") ||
     name.includes("thuốc") ||
-    name.includes("thuoc") ||
-    name.includes("vật tư") ||
-    name.includes("vat tu")
+    name.includes("thuoc")
   ) {
     return "THUOC";
   }
   return "HANG_HOA";
-}
-
-function isForcedThuoc(slug, name) {
-  const folded = foldCode(slug);
-  if (FORCE_THUOC.some((s) => foldCode(s) === folded)) return true;
-  if (THUOC_PREFIXES.some((p) => folded.startsWith(p))) return true;
-  const n = String(name || "").normalize("NFC").toLowerCase();
-  if (
-    /thuốc|thuoc|vắc\s*xin|vac\s*xin|vắc-xin|vaccine|vắc xin|tpcn|thực phẩm chức năng|thuc pham chuc nang/.test(
-      n,
-    )
-  ) {
-    return true;
-  }
-  return false;
 }
 
 function chunkList(list, size) {
@@ -306,11 +258,7 @@ for (const row of excelRows) {
       continue;
     }
     const { product, how } = result.hit;
-    let group = row.group;
-    if (isForcedThuoc(product.slug, product.name) && group !== "DICH_VU") {
-      group = "THUOC";
-    }
-    setPlan(product, group, how);
+    setPlan(product, row.group, how);
     ok.push({
       sku: row.oldSku || row.newSku,
       name: row.name,
@@ -327,20 +275,10 @@ for (const row of excelRows) {
   }
 }
 
-// Mã không có trong Excel: thuốc bắt buộc / heuristic, còn lại hàng hóa
+// Mã không có trong Excel → hàng hóa (chỉ YT trong Excel mới là thuốc)
 for (const p of products) {
-  if (planned.has(p.id)) {
-    const cur = planned.get(p.id);
-    if (cur.group !== "DICH_VU" && isForcedThuoc(p.slug, p.name)) {
-      setPlan(p, "THUOC", "force/heuristic");
-    }
-    continue;
-  }
-  if (isForcedThuoc(p.slug, p.name)) {
-    setPlan(p, "THUOC", "force/heuristic");
-  } else {
-    setPlan(p, "HANG_HOA", "còn lại");
-  }
+  if (planned.has(p.id)) continue;
+  setPlan(p, "HANG_HOA", "còn lại");
 }
 
 const hideRows = products.filter(isGarbageAlias);
@@ -368,7 +306,7 @@ console.log(
 console.log(`Ẩn mã rác:     ${hideIds.length}`);
 
 const sampleForce = ["CĐTTGV1007", "HĐTHTR2012", "IT13V01", "IT23V01", "IT23V02", "MTH1001"];
-console.log("\n--- Mã thuốc bắt buộc ---");
+console.log("\n--- Kiểm tra vài mã mẫu (nhóm theo ngành YT/…) ---");
 for (const sku of sampleForce) {
   const p = bySlug.get(foldCode(sku));
   if (!p) {
