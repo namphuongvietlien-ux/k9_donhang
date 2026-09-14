@@ -1,8 +1,8 @@
--- Chạy trên Supabase SQL Editor / db query.
--- Hẹn giờ Telegram nhắc lấy vaccine (giờ VN):
--- 11:00 PH-Q8-Q5 | 12:30 Q4 Mới-Q4 Cũ-Q1
--- 11:00 VN = 04:00 UTC | 12:30 VN = 05:30 UTC
--- Kiểm tra sau khi chạy: scripts/sql-vaccine-pickup-check.sql
+-- Nhắc lấy vaccine: đặt lại cron (idempotent) + tăng timeout pg_net.
+-- Cron cũ gọi net.http_post với timeout mặc định (5000ms trên production) — Edge Function
+-- cold start + 2 query + gọi Telegram vượt 5s → net._http_response ghi
+-- "Timeout of 5000 ms reached", tin nhắn không bao giờ được gửi (xác nhận 14/09/2026).
+-- 11:00 VN = 04:00 UTC → PH, Q8, Q5 | 12:30 VN = 05:30 UTC → Q4 Mới, Q4 Cũ, Q1
 
 CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS pg_net WITH SCHEMA extensions;
