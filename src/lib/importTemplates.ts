@@ -1,12 +1,24 @@
 /** File mẫu CSV (mở được bằng Excel) — khớp cột import K9/GAS */
 
-export type TemplateKind = "stockQ7" | "catalogFast" | "orderDhDc" | "transferDc";
+export type TemplateKind =
+  | "stockQ7"
+  | "stockFlat"
+  | "catalogFast"
+  | "orderDhDc"
+  | "transferDc";
 
 const TEMPLATES: Record<
   TemplateKind,
   { filename: string; headers: string[]; sampleRows: string[][] }
 > = {
+  /** MISA TỔNG HỢP TỒN KHO — tải file xlsx trong public/, không dùng CSV */
   stockQ7: {
+    filename: "TONG_HOP_TON_KHO.xlsx",
+    headers: ["Tên hàng hóa", "Mã hàng hóa", "Đơn vị tính", "Đầu kỳ", "Nhập kho", "Xuất kho", "Cuối kỳ", "Cửa hàng"],
+    sampleRows: [],
+  },
+  /** Cấu trúc cũ (GAS TON_Q7): một kho, mã chưa có được tạo mới */
+  stockFlat: {
     filename: "mau-ton-kho-Q7.csv",
     headers: ["Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Tồn kho"],
     sampleRows: [
@@ -88,6 +100,8 @@ export function getTemplateLabel(kind: TemplateKind): string {
   switch (kind) {
     case "stockQ7":
       return "Mẫu TỔNG HỢP TỒN KHO";
+    case "stockFlat":
+      return "Mẫu file tồn kho (1 kho)";
     case "catalogFast":
       return "Mẫu file nhập khẩu danh mục";
     case "orderDhDc":

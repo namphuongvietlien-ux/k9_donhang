@@ -307,9 +307,10 @@ export default function CatalogStockImport({
         <p className="text-sm text-muted-foreground font-normal">
           {daily ? (
             <>
-              Kéo file <strong>TỔNG HỢP TỒN KHO</strong> (MISA). Hệ thống đọc{" "}
+              Kéo file <strong>TỔNG HỢP TỒN KHO</strong> (MISA): đọc{" "}
               <strong>Cuối kỳ</strong> theo từng <strong>Cửa hàng</strong>, bỏ
-              dòng tổng và Tổng công ty.
+              dòng tổng và Tổng công ty. Hoặc file tồn kho 1 kho (Mã hàng, Mã
+              vạch, Tên hàng, ĐVT, Tồn kho) → chọn kho ghi tồn sau khi đọc file.
             </>
           ) : (
             <>
@@ -358,9 +359,11 @@ export default function CatalogStockImport({
 
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-end gap-3">
-          {mode === "stockQ7" && !daily && !misa && (
+          {mode === "stockQ7" && !misa && (!daily || parsed) && (
             <div className="space-y-1.5 max-w-sm flex-1 min-w-[200px]">
-              <Label>Kho ghi tồn (mặc định Q7 như TON_Q7)</Label>
+              <Label>
+                Kho ghi tồn (file 1 kho, không có cột Cửa hàng — mặc định Q7)
+              </Label>
               <Select
                 value={warehouseId}
                 onValueChange={setWarehouseId}
@@ -379,18 +382,37 @@ export default function CatalogStockImport({
               </Select>
             </div>
           )}
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() =>
-              downloadImportTemplate(
-                mode === "stockQ7" ? "stockQ7" : "catalogFast",
-              )
-            }
-          >
-            <Download className="w-4 h-4 mr-2" />
-            Tải file mẫu
-          </Button>
+          {mode === "stockQ7" ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => downloadImportTemplate("stockQ7")}
+                title="File xlsx xuất từ MISA: Tên hàng hóa, Mã hàng hóa, Đơn vị tính, Đầu kỳ, Nhập kho, Xuất kho, Cuối kỳ, Cửa hàng"
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Mẫu TỔNG HỢP TỒN KHO (MISA)
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => downloadImportTemplate("stockFlat")}
+                title="CSV 1 kho: Mã hàng, Mã vạch, Tên hàng, ĐVT, Tồn kho"
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Mẫu file tồn kho 1 kho (CSV)
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => downloadImportTemplate("catalogFast")}
+            >
+              <Download className="w-4 h-4 mr-2" />
+              Tải file mẫu
+            </Button>
+          )}
         </div>
 
         {(step === 1 || !parsed) && (
@@ -425,13 +447,20 @@ export default function CatalogStockImport({
               {parsing
                 ? "Đang đọc file…"
                 : mode === "stockQ7"
-                  ? "Kéo thả TỔNG HỢP TỒN KHO (.xlsx)"
+                  ? "Kéo thả TỔNG HỢP TỒN KHO (.xlsx) hoặc file tồn kho 1 kho (.csv/.xlsx)"
                   : "Kéo thả file nhập khẩu danh mục"}
             </p>
             <p className="text-sm text-muted-foreground mt-1">
-              {mode === "stockQ7"
-                ? "Cột: Tên hàng hóa, Mã hàng hóa, Đơn vị tính, Cuối kỳ, Cửa hàng"
-                : "Cột: Mã hàng, Mã vạch, Tên hàng, ĐVT, Parent_SKU (như Data_Excel)"}
+              {mode === "stockQ7" ? (
+                <>
+                  MISA: Tên hàng hóa, Mã hàng hóa, Đơn vị tính, Cuối kỳ, Cửa hàng
+                  <br />
+                  1 kho: Mã hàng, Mã vạch, Tên hàng, ĐVT, Tồn kho (tự nhận dạng
+                  theo tiêu đề cột)
+                </>
+              ) : (
+                "Cột: Mã hàng, Mã vạch, Tên hàng, ĐVT, Parent_SKU (như Data_Excel)"
+              )}
             </p>
             {fileName && (
               <p className="text-xs text-primary mt-2 font-mono">{fileName}</p>
