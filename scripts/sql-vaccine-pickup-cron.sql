@@ -30,7 +30,7 @@ SELECT cron.schedule(
         )
       ),
       body := '{"slot":"noon"}'::jsonb,
-      timeout_milliseconds := 15000
+      timeout_milliseconds := 30000
     );
   $$
 );
@@ -50,7 +50,7 @@ SELECT cron.schedule(
         )
       ),
       body := '{"slot":"afternoon"}'::jsonb,
-      timeout_milliseconds := 15000
+      timeout_milliseconds := 30000
     );
   $$
 );

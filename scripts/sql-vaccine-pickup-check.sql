@@ -16,7 +16,7 @@ ORDER BY d.start_time DESC
 LIMIT 20;
 
 -- 3) Edge Function trả gì? (status_code 200 = ok; 401 = token sai; 502 = Telegram lỗi;
---    error_msg 'Timeout was reached' = pg_net cắt sớm → cần timeout_milliseconds lớn hơn)
+--    error_msg 'Timeout of 5000 ms reached' = pg_net cắt sớm → chạy lại sql-vaccine-pickup-cron.sql)
 SELECT id, created, status_code, error_msg, left(content::text, 400) AS content
 FROM net._http_response
 WHERE content::text LIKE '%slot%'

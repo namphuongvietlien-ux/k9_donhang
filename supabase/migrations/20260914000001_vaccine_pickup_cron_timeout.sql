@@ -1,6 +1,7 @@
 -- Nhắc lấy vaccine: đặt lại cron (idempotent) + tăng timeout pg_net.
--- pg_net mặc định timeout 2000ms — Edge Function cold start + 2 query + gọi Telegram
--- dễ vượt → request bị ghi "Timeout was reached" trong net._http_response.
+-- Cron cũ gọi net.http_post với timeout mặc định (5000ms trên production) — Edge Function
+-- cold start + 2 query + gọi Telegram vượt 5s → net._http_response ghi
+-- "Timeout of 5000 ms reached", tin nhắn không bao giờ được gửi (xác nhận 14/09/2026).
 -- 11:00 VN = 04:00 UTC → PH, Q8, Q5 | 12:30 VN = 05:30 UTC → Q4 Mới, Q4 Cũ, Q1
 
 CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA extensions;
@@ -29,7 +30,7 @@ SELECT cron.schedule(
         )
       ),
       body := '{"slot":"noon"}'::jsonb,
-      timeout_milliseconds := 15000
+      timeout_milliseconds := 30000
     );
   $$
 );
@@ -49,7 +50,7 @@ SELECT cron.schedule(
         )
       ),
       body := '{"slot":"afternoon"}'::jsonb,
-      timeout_milliseconds := 15000
+      timeout_milliseconds := 30000
     );
   $$
 );
