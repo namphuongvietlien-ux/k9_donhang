@@ -81,6 +81,7 @@ import {
 import { useProductGifts } from "@/hooks/useProductGifts";
 import { attachGiftLines } from "@/lib/productGifts";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
@@ -111,7 +112,31 @@ interface CartLine {
   giftRuleId?: string;
 }
 
-type TransferFormDraft = {
+/** Mỗi loại phiếu một giỏ riêng — soạn DH và DT song song, lưu 1 lần 2 đơn. */
+type CartMap = Record<PhieuLoai, CartLine[]>;
+
+const PHIEU_LOAI_ORDER: PhieuLoai[] = ["DonThuoc", "DonHang", "DieuChuyen"];
+/** Hai thẻ Q7 có thể lưu chung một lượt (cùng kho xuất Q7 + kho nhận). */
+const Q7_PAIR: PhieuLoai[] = ["DonThuoc", "DonHang"];
+
+const emptyCarts = (): CartMap => ({
+  DonThuoc: [],
+  DonHang: [],
+  DieuChuyen: [],
+});
+
+const LOAI_LABEL: Record<PhieuLoai, string> = {
+  DonThuoc: "Đơn thuốc (DT)",
+  DonHang: "Đơn hàng (DH)",
+  DieuChuyen: "Điều chuyển (DC)",
+};
+const LOAI_SHORT: Record<PhieuLoai, string> = {
+  DonThuoc: "DT",
+  DonHang: "DH",
+  DieuChuyen: "DC",
+};
+
+type TransferFormDraftV1 = {
   v: 1;
   loai: PhieuLoai;
   sourceWh: string;
@@ -119,6 +144,44 @@ type TransferFormDraft = {
   lines: CartLine[];
   savedAt?: string;
 };
+
+type TransferFormDraft = {
+  v: 2;
+  loai: PhieuLoai;
+  sourceWh: string;
+  destWh: string;
+  carts: CartMap;
+  savedAt?: string;
+};
+
+function normalizeDraftLines(rows: unknown): CartLine[] {
+  return (Array.isArray(rows) ? (rows as CartLine[]) : []).map((l) => ({
+    ...l,
+    unitOptions: Array.isArray(l.unitOptions) ? l.unitOptions : [],
+  }));
+}
+
+/** Đọc nháp v2 (nhiều giỏ) hoặc v1 (một giỏ → gán vào thẻ đang chọn). */
+function cartsFromDraft(
+  draft: TransferFormDraft | TransferFormDraftV1 | null | undefined,
+): CartMap {
+  const carts = emptyCarts();
+  if (!draft) return carts;
+  if (draft.v === 2 && draft.carts) {
+    for (const k of PHIEU_LOAI_ORDER) {
+      carts[k] = normalizeDraftLines(draft.carts[k]);
+    }
+    return carts;
+  }
+  const legacy = draft as TransferFormDraftV1;
+  const loai: PhieuLoai = legacy.loai || "DonHang";
+  carts[loai] = normalizeDraftLines(legacy.lines);
+  return carts;
+}
+
+function countCartLines(carts: CartMap): number {
+  return PHIEU_LOAI_ORDER.reduce((s, k) => s + carts[k].length, 0);
+}
 
 interface CatalogHit {
   id: string;
@@ -187,7 +250,9 @@ const CreateWarehouseOrderForm = forwardRef<
   const scanRef = useRef<HTMLInputElement>(null);
 
   const initialDraftRef = useRef(
-    peekLocalDraft<TransferFormDraft>(K9_DRAFT_ORDER_TRANSFER),
+    peekLocalDraft<TransferFormDraft | TransferFormDraftV1>(
+      K9_DRAFT_ORDER_TRANSFER,
+    ),
   );
   const initialDraft = initialDraftRef.current;
   const restoredToastShown = useRef(false);
@@ -201,30 +266,42 @@ const CreateWarehouseOrderForm = forwardRef<
   const [destWh, setDestWh] = useState(() => initialDraft?.destWh || "");
   const [scan, setScan] = useState("");
   const [allowPartial, setAllowPartial] = useState(false);
-  const [lines, setLines] = useState<CartLine[]>(
-    () =>
-      (Array.isArray(initialDraft?.lines) ? initialDraft!.lines : []).map(
-        (l) => ({
-          ...l,
-          unitOptions: Array.isArray(l.unitOptions) ? l.unitOptions : [],
-        }),
-      ),
+  const [carts, setCarts] = useState<CartMap>(() =>
+    cartsFromDraft(initialDraft),
   );
+  /** Giỏ của thẻ đang chọn */
+  const lines = carts[loai];
+  const setCartLines = (
+    target: PhieuLoai,
+    updater: CartLine[] | ((prev: CartLine[]) => CartLine[]),
+  ) => {
+    setCarts((prev) => ({
+      ...prev,
+      [target]:
+        typeof updater === "function" ? updater(prev[target]) : updater,
+    }));
+  };
+  const setLines = (
+    updater: CartLine[] | ((prev: CartLine[]) => CartLine[]),
+  ) => setCartLines(loai, updater);
   const [dupOpen, setDupOpen] = useState(false);
   const [dupInfo, setDupInfo] = useState<DuplicatePreSaveResult | null>(null);
+  /** Danh sách loại phiếu còn phải lưu sau khi user chấp nhận đơn trùng */
+  const [dupTargets, setDupTargets] = useState<PhieuLoai[]>([]);
 
   const draftPayload = useMemo(
     (): TransferFormDraft => ({
-      v: 1,
+      v: 2,
       loai,
       sourceWh,
       destWh,
-      lines,
+      carts,
       savedAt: new Date().toISOString(),
     }),
-    [loai, sourceWh, destWh, lines],
+    [loai, sourceWh, destWh, carts],
   );
-  const formDirty = lines.length > 0;
+  const totalDraftLines = countCartLines(carts);
+  const formDirty = totalDraftLines > 0;
   const { clearDraft } = useLocalDraft({
     storageKey: K9_DRAFT_ORDER_TRANSFER,
     value: draftPayload,
@@ -234,17 +311,16 @@ const CreateWarehouseOrderForm = forwardRef<
 
   useEffect(() => {
     if (restoredToastShown.current) return;
-    if (!initialDraft?.lines?.length) return;
+    const restored = cartsFromDraft(initialDraft);
+    const total = countCartLines(restored);
+    if (!total) return;
     restoredToastShown.current = true;
+    const parts = PHIEU_LOAI_ORDER.filter((k) => restored[k].length).map(
+      (k) => `${LOAI_SHORT[k]}: ${restored[k].length} dòng`,
+    );
     toast({
       title: "Đã khôi phục bản nháp chưa lưu trước đó!",
-      description: `${initialDraft.lines.length} dòng · ${
-        initialDraft.loai === "DieuChuyen"
-          ? "Điều chuyển"
-          : initialDraft.loai === "DonThuoc"
-            ? "Đơn thuốc"
-            : "Đơn hàng"
-      }`,
+      description: parts.join(" · "),
     });
   }, [toast, initialDraft]);
 
@@ -326,8 +402,8 @@ const CreateWarehouseOrderForm = forwardRef<
 
   const skuUnitIndex = useSkuUnitIndex(catalogList as CatalogProductRow[]);
 
-  const withGifts = (rows: CartLine[]): CartLine[] => {
-    const kind = phieuLoaiToKind(loai);
+  const withGifts = (rows: CartLine[], forLoai: PhieuLoai = loai): CartLine[] => {
+    const kind = phieuLoaiToKind(forLoai);
     return attachGiftLines(rows, giftRules, {
       isGift: (line) => !!line.isGift,
       mainOf: (line) => ({
@@ -370,16 +446,37 @@ const CreateWarehouseOrderForm = forwardRef<
 
   useEffect(() => {
     if (!giftRules.length) return;
-    setLines((prev) => {
-      const next = withGifts(prev);
+    setCarts((prev) => {
       const sig = (rows: CartLine[]) =>
         rows
           .filter((l) => l.isGift)
           .map((l) => `${l.key}:${l.quantity}`)
           .join("|");
-      return sig(prev) === sig(next) ? prev : next;
+      let changed = false;
+      const next = { ...prev };
+      for (const k of PHIEU_LOAI_ORDER) {
+        if (!prev[k].length) continue;
+        const rows = withGifts(prev[k], k);
+        if (sig(prev[k]) !== sig(rows)) {
+          next[k] = rows;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
     });
-  }, [giftRules, loai]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- withGifts đọc catalog/giftRules hiện tại
+  }, [giftRules]);
+
+  /**
+   * Thẻ Q7 (DH/DT): mã không hợp thẻ đang chọn → thẻ Q7 còn lại (nếu hợp).
+   * DC nhận mọi mã → null. Trả null khi mã hợp thẻ hiện tại.
+   */
+  const suggestLoaiFor = (p: CatalogHit): PhieuLoai | null => {
+    if (loai === "DieuChuyen") return null;
+    if (lineFitsOrderKind(phieuLoaiToKind(loai), p)) return null;
+    const other: PhieuLoai = loai === "DonHang" ? "DonThuoc" : "DonHang";
+    return lineFitsOrderKind(phieuLoaiToKind(other), p) ? other : null;
+  };
 
   // Lọc mã vạch chặt (exact / prefix) đã nằm trong filterCatalogSuggestions —
   // không vá lại ở tầng form để hai nơi không lệch nhau.
@@ -395,6 +492,19 @@ const CreateWarehouseOrderForm = forwardRef<
       ),
     [scan, catalogList, loai],
   );
+
+  /** Mã khớp từ khóa nhưng thuộc thẻ Q7 còn lại — dùng để gợi ý khi "không tìm thấy". */
+  const otherTabSuggestions = useMemo((): CatalogHit[] => {
+    if (!scan.trim() || suggestions.length) return [];
+    return filterCatalogSuggestions(
+      catalogList.filter(
+        (p) => !isServiceCatalogItem(p) && suggestLoaiFor(p) !== null,
+      ),
+      scan,
+      5,
+    ) as CatalogHit[];
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- suggestLoaiFor chỉ phụ thuộc loai
+  }, [scan, catalogList, loai, suggestions.length]);
 
   /** Khớp tuyệt đối: mã hàng trước, mã vạch sau, mã vạch dùng chung → ambiguous */
   const exactScan = useMemo(
@@ -424,7 +534,37 @@ const CreateWarehouseOrderForm = forwardRef<
     [lines],
   );
 
-  const addProduct = (p: CatalogHit, preferredBarcode?: string) => {
+  /**
+   * Mã thuộc thẻ Q7 còn lại → báo rõ DT/DH + nút thêm thẳng vào thẻ đó
+   * (không phải đổi thẻ, không tạo dòng Lỗi Mã).
+   */
+  const suggestOtherTab = (
+    p: CatalogHit,
+    target: PhieuLoai,
+    preferredBarcode?: string,
+  ) => {
+    const isMed = phieuLoaiToKind(target) === "DT";
+    toast({
+      title: `${normalizeOrderCodeText(p.slug)} là ${isMed ? "THUỐC" : "HÀNG HÓA"} → thuộc ${LOAI_LABEL[target]}`,
+      description: `${p.name}. Không thêm được vào ${LOAI_LABEL[loai]} — bấm "Thêm vào ${LOAI_SHORT[target]}" để đặt song song.`,
+      variant: "destructive",
+      action: (
+        <ToastAction
+          altText={`Thêm vào ${LOAI_SHORT[target]}`}
+          onClick={() => addProduct(p, preferredBarcode, target)}
+        >
+          Thêm vào {LOAI_SHORT[target]}
+        </ToastAction>
+      ),
+    });
+    scanRef.current?.focus();
+  };
+
+  const addProduct = (
+    p: CatalogHit,
+    preferredBarcode?: string,
+    target: PhieuLoai = loai,
+  ) => {
     const block = checkCatalogAddBlocked(p);
     if (block.blocked) {
       toast({
@@ -436,8 +576,13 @@ const CreateWarehouseOrderForm = forwardRef<
       scanRef.current?.focus();
       return;
     }
-    const mix = assertLineFitsOrderKind(phieuLoaiToKind(loai), p);
+    const mix = assertLineFitsOrderKind(phieuLoaiToKind(target), p);
     if (!mix.ok) {
+      const other = target === loai ? suggestLoaiFor(p) : null;
+      if (other) {
+        suggestOtherTab(p, other, preferredBarcode);
+        return;
+      }
       notifyOrderKindMixBlocked();
       toast({ title: mix.message, variant: "destructive" });
       setScan("");
@@ -470,7 +615,7 @@ const CreateWarehouseOrderForm = forwardRef<
     const catalogMoq = Number(p.unit_2_ratio) > 1 ? Number(p.unit_2_ratio) : 1;
     const moq = resolveLineMoq(p, unit);
 
-    setLines((prev) => {
+    setCartLines(target, (prev) => {
       const exist = prev.find(
         (l) =>
           !l.isGift &&
@@ -484,25 +629,40 @@ const CreateWarehouseOrderForm = forwardRef<
               ? { ...l, quantity: l.quantity + moq, moq: catalogMoq }
               : l,
           ),
+          target,
         );
       }
-      return withGifts([
-        {
-          key: `${Date.now()}-${ma}-${unit}`,
-          maHang: ma,
-          maVach: barcode,
-          tenHang: p.name,
-          dvt: unit,
-          unitOptions: opts,
-          quantity: moq,
-          productId: picked?.productId || p.id,
-          price: picked?.price ?? p.price ?? 0,
-          stockQty: getQty(ma, unit),
-          moq: catalogMoq,
-        },
-        ...prev,
-      ]);
+      return withGifts(
+        [
+          {
+            key: `${Date.now()}-${ma}-${unit}`,
+            maHang: ma,
+            maVach: barcode,
+            tenHang: p.name,
+            dvt: unit,
+            unitOptions: opts,
+            quantity: moq,
+            productId: picked?.productId || p.id,
+            price: picked?.price ?? p.price ?? 0,
+            stockQty: getQty(ma, unit),
+            moq: catalogMoq,
+          },
+          ...prev,
+        ],
+        target,
+      );
     });
+    if (target !== loai) {
+      toast({
+        title: `Đã thêm vào ${LOAI_LABEL[target]}`,
+        description: `${ma} · ${p.name}. Thẻ ${LOAI_SHORT[target]} đang soạn song song — bấm "Lưu cả DT + DH" để tạo 2 đơn một lần.`,
+        action: (
+          <ToastAction altText="Mở thẻ" onClick={() => setLoai(target)}>
+            Mở thẻ {LOAI_SHORT[target]}
+          </ToastAction>
+        ),
+      });
+    }
     setScan("");
     scanRef.current?.focus();
   };
@@ -601,6 +761,28 @@ const CreateWarehouseOrderForm = forwardRef<
       addProduct(suggestions[0], raw);
       return;
     }
+    // Không có trong thẻ này nhưng có ở thẻ Q7 còn lại → gợi ý DT/DH thay vì tạo Lỗi Mã
+    if (otherTabSuggestions.length) {
+      const best = otherTabSuggestions[0];
+      const target = suggestLoaiFor(best);
+      if (
+        target &&
+        (otherTabSuggestions.length === 1 ||
+          scoreCatalogItem(best, scan) >= 1200)
+      ) {
+        suggestOtherTab(best, target, raw);
+        return;
+      }
+      const isMed = loai === "DonHang";
+      toast({
+        title: `Không có trong ${LOAI_LABEL[loai]} — ${otherTabSuggestions.length} mã khớp là ${isMed ? "THUỐC" : "HÀNG HÓA"}`,
+        description: `${otherTabSuggestions
+          .map((p) => normalizeOrderCodeText(p.slug))
+          .join(", ")} → thuộc ${LOAI_LABEL[isMed ? "DonThuoc" : "DonHang"]}. Chọn mã trong danh sách gợi ý để thêm đúng thẻ.`,
+        variant: "destructive",
+      });
+      return;
+    }
     addCustomSku(raw);
   };
 
@@ -656,8 +838,18 @@ const CreateWarehouseOrderForm = forwardRef<
     );
   };
 
-  const doSave = async (acknowledgeDuplicate: boolean) => {
-    const preparedLines = lines.map((l) => {
+  /**
+   * Lưu một phiếu cho thẻ `target`.
+   * @returns "ok" | "empty" | "blocked" (lỗi nhập liệu / lỗi server) | "dup" (đã mở dialog trùng)
+   */
+  const saveOne = async (
+    target: PhieuLoai,
+    acknowledgeDuplicate: boolean,
+  ): Promise<"ok" | "empty" | "blocked" | "dup"> => {
+    const rows = carts[target];
+    if (!rows.length) return "empty";
+    const tag = LOAI_LABEL[target];
+    const preparedLines = rows.map((l) => {
       if (l.quantity <= 0) return l;
       if (l.isCustomSku && !String(l.tenHang || "").trim()) {
         return {
@@ -673,11 +865,11 @@ const CreateWarehouseOrderForm = forwardRef<
     );
     if (incomplete) {
       toast({
-        title: "Thiếu mã hàng",
+        title: `Thiếu mã hàng — ${tag}`,
         description: "Mỗi dòng cần có mã hàng trước khi lưu.",
         variant: "destructive",
       });
-      return;
+      return "blocked";
     }
 
     const lineMoq = (l: CartLine) => {
@@ -701,15 +893,15 @@ const CreateWarehouseOrderForm = forwardRef<
     });
     if (moqBad && !allowPartial) {
       toast({
-        title: "Chưa đạt số lượng MOQ",
+        title: `Chưa đạt số lượng MOQ — ${tag}`,
         description:
           "Bạn đang nhập số lượng lẻ. Vui lòng tick vào ô 'Xác nhận cho phép xuất lẻ' ở trên bảng để lưu đơn.",
         variant: "destructive",
       });
-      return;
+      return "blocked";
     }
 
-    const kind = phieuLoaiToKind(loai);
+    const kind = phieuLoaiToKind(target);
     const mixBad = preparedLines.find((l) => {
       const hit = catalogList.find(
         (p) =>
@@ -724,16 +916,22 @@ const CreateWarehouseOrderForm = forwardRef<
     if (mixBad) {
       notifyOrderKindMixBlocked();
       toast({
-        title: "Không được trộn lẫn! Vui lòng nhập thuốc và hàng hóa riêng biệt",
+        title: `${tag}: không được trộn lẫn! Vui lòng nhập thuốc và hàng hóa riêng biệt`,
+        description: `Dòng ${normalizeOrderCodeText(mixBad.maHang)} không thuộc ${tag}.`,
         variant: "destructive",
       });
-      return;
+      return "blocked";
     }
+
+    // DH/DT luôn xuất Q7 dù thẻ đang mở là DC
+    const sourceForTarget = isQ7PhieuLoai(target)
+      ? q7?.id || sourceWh
+      : sourceWh;
 
     try {
       const res = await createOrder.mutateAsync({
-        loaiPhieu: loai,
-        sourceWarehouseId: sourceWh,
+        loaiPhieu: target,
+        sourceWarehouseId: sourceForTarget,
         destWarehouseId: destWh,
         acknowledgeDuplicate,
         lines: preparedLines.map((l) => ({
@@ -748,32 +946,80 @@ const CreateWarehouseOrderForm = forwardRef<
           giftRuleId: l.giftRuleId || null,
         })),
       });
-      toast({ title: "Đã tạo phiếu", description: res.order_code });
-      clearDraft();
-      setLines([]);
-      setAllowPartial(false);
-      setDupOpen(false);
-      setDupInfo(null);
-      void refetchCatalog();
+      toast({ title: `Đã tạo phiếu ${LOAI_SHORT[target]}`, description: res.order_code });
+      setCartLines(target, []);
       onCreated?.(res.id);
-      scanRef.current?.focus();
+      return "ok";
     } catch (e) {
       const dup = (e as Error & { duplicate?: DuplicatePreSaveResult })
         ?.duplicate;
       if (dup?.isDuplicate && !acknowledgeDuplicate) {
         setDupInfo(dup);
         setDupOpen(true);
-        return;
+        return "dup";
       }
       toast({
-        title: "Không tạo được phiếu",
+        title: `Không tạo được phiếu ${LOAI_SHORT[target]}`,
         description: e instanceof Error ? e.message : "Lỗi",
         variant: "destructive",
       });
       if (e instanceof Error && e.message.includes("trộn lẫn")) {
         notifyOrderKindMixBlocked();
       }
+      return "blocked";
     }
+  };
+
+  /**
+   * Lưu lần lượt các thẻ trong `targets` (bỏ thẻ trống). Gặp đơn trùng → mở dialog,
+   * nhớ các thẻ còn lại vào `dupTargets` để tiếp tục sau khi user chấp nhận.
+   */
+  const doSave = async (acknowledgeDuplicate: boolean, targets: PhieuLoai[]) => {
+    const queue = targets.filter((t) => carts[t].length > 0);
+    if (!queue.length) {
+      toast({ title: "Chưa có hàng", variant: "destructive" });
+      return;
+    }
+    let saved = 0;
+    for (let i = 0; i < queue.length; i++) {
+      const t = queue[i];
+      // Chỉ đơn đầu tiên trong lượt được coi là đã xác nhận trùng
+      const ack = acknowledgeDuplicate && i === 0;
+      const r = await saveOne(t, ack);
+      if (r === "ok") {
+        saved += 1;
+        continue;
+      }
+      if (r === "dup") {
+        setDupTargets(queue.slice(i));
+        return;
+      }
+      if (r === "blocked") {
+        setLoai(t);
+        break;
+      }
+    }
+    setDupOpen(false);
+    setDupInfo(null);
+    setDupTargets([]);
+    if (saved > 0) {
+      void refetchCatalog();
+      if (saved > 1) {
+        toast({
+          title: `Đã tạo ${saved} phiếu`,
+          description: queue.map((t) => LOAI_SHORT[t]).join(" + "),
+        });
+      }
+    }
+    const remaining = countCartLines({
+      ...carts,
+      ...Object.fromEntries(queue.slice(0, saved).map((t) => [t, []])),
+    } as CartMap);
+    if (remaining === 0) {
+      clearDraft();
+      setAllowPartial(false);
+    }
+    scanRef.current?.focus();
   };
 
   const handleSubmit = async () => {
@@ -781,7 +1027,17 @@ const CreateWarehouseOrderForm = forwardRef<
       toast({ title: "Chưa có hàng", variant: "destructive" });
       return;
     }
-    await doSave(false);
+    await doSave(false, [loai]);
+  };
+
+  /** Lưu cả 2 thẻ Q7 (DT trước, DH sau) trong một lượt */
+  const q7PairCount = Q7_PAIR.filter((t) => carts[t].length > 0).length;
+  const handleSubmitPair = async () => {
+    if (q7PairCount === 0) {
+      toast({ title: "Chưa có hàng", variant: "destructive" });
+      return;
+    }
+    await doSave(false, Q7_PAIR);
   };
 
   const srcWh = warehouses.find((w) => w.id === sourceWh);
@@ -811,76 +1067,66 @@ const CreateWarehouseOrderForm = forwardRef<
 
       <div className="border rounded-lg p-4 space-y-4 bg-card">
         <div className="space-y-2">
-          <Label>Loại đơn</Label>
-          <div className="flex flex-col sm:flex-row gap-3 flex-wrap">
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input
-                type="radio"
-                name="loaiPhieu"
-                checked={loai === "DonThuoc"}
-                onChange={() => {
-                  const kind = phieuLoaiToKind("DonThuoc");
-                  const bad = lines.some((l) => {
-                    if (l.isGift) return false;
-                    const hit = catalogList.find(
-                      (p) =>
-                        p.id === l.productId ||
-                        normalizeOrderCodeText(p.slug) ===
-                          normalizeOrderCodeText(l.maHang),
-                    );
-                    return !lineFitsOrderKind(
-                      kind,
-                      hit || { slug: l.maHang, name: l.tenHang },
-                    );
-                  });
-                  if (bad) {
-                    notifyOrderKindMixBlocked();
-                    return;
-                  }
-                  setLoai("DonThuoc");
-                }}
-              />
-              Đơn thuốc (DT- · lấy từ Q7)
-            </label>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input
-                type="radio"
-                name="loaiPhieu"
-                checked={loai === "DonHang"}
-                onChange={() => {
-                  const kind = phieuLoaiToKind("DonHang");
-                  const bad = lines.some((l) => {
-                    if (l.isGift) return false;
-                    const hit = catalogList.find(
-                      (p) =>
-                        p.id === l.productId ||
-                        normalizeOrderCodeText(p.slug) ===
-                          normalizeOrderCodeText(l.maHang),
-                    );
-                    return !lineFitsOrderKind(
-                      kind,
-                      hit || { slug: l.maHang, name: l.tenHang },
-                    );
-                  });
-                  if (bad) {
-                    notifyOrderKindMixBlocked();
-                    return;
-                  }
-                  setLoai("DonHang");
-                }}
-              />
-              Đơn hàng (DH- · lấy từ Q7)
-            </label>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input
-                type="radio"
-                name="loaiPhieu"
-                checked={loai === "DieuChuyen"}
-                onChange={() => setLoai("DieuChuyen")}
-              />
-              Điều chuyển (DC- · giữa các kho)
-            </label>
+          <Label>Loại đơn — mỗi thẻ là một phiếu riêng, soạn song song</Label>
+          <div
+            role="tablist"
+            aria-label="Loại đơn"
+            className="inline-flex flex-wrap gap-1 rounded-md bg-muted p-1"
+          >
+            {(
+              [
+                ["DonThuoc", "Đơn thuốc", "DT- · lấy từ Q7"],
+                ["DonHang", "Đơn hàng", "DH- · lấy từ Q7"],
+                ["DieuChuyen", "Điều chuyển", "DC- · giữa các kho"],
+              ] as [PhieuLoai, string, string][]
+            ).map(([value, title, sub]) => {
+              const active = loai === value;
+              const count = carts[value].length;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  data-testid={`tab-${LOAI_SHORT[value]}`}
+                  onClick={() => setLoai(value)}
+                  className={cn(
+                    "flex items-center gap-2 rounded-sm px-3 py-1.5 text-sm transition-colors",
+                    active
+                      ? "bg-background text-foreground shadow-sm font-semibold"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <span>
+                    {title}
+                    <span className="ml-1 text-[11px] font-normal text-muted-foreground">
+                      ({sub})
+                    </span>
+                  </span>
+                  <span
+                    className={cn(
+                      "min-w-[1.5rem] rounded-full px-1.5 py-0.5 text-[11px] tabular-nums text-center",
+                      count > 0
+                        ? value === "DonThuoc"
+                          ? "bg-sky-100 text-sky-800"
+                          : value === "DonHang"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : "bg-amber-100 text-amber-800"
+                        : "bg-muted-foreground/10 text-muted-foreground",
+                    )}
+                    title={`${count} dòng trong ${LOAI_LABEL[value]}`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
+          <p className="text-[11px] text-muted-foreground">
+            Quét mã thuốc khi đang ở thẻ DH (hoặc ngược lại) → hệ thống báo mã
+            thuộc thẻ nào và cho thêm thẳng vào thẻ đó. Bấm{" "}
+            <strong>Lưu cả DT + DH</strong> để tạo 2 phiếu một lần.
+          </p>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
@@ -1004,6 +1250,59 @@ const CreateWarehouseOrderForm = forwardRef<
             inputClassName="h-11 text-sm font-semibold border-2 border-primary"
             listClassName="left-4 right-4 top-[7.5rem] mt-0"
             emptyText={
+              otherTabSuggestions.length ? (
+                <div className="space-y-1.5" data-testid="other-tab-suggest">
+                  <div className="text-foreground">
+                    Không có trong <strong>{LOAI_LABEL[loai]}</strong>. Mã này là{" "}
+                    <strong
+                      className={
+                        loai === "DonHang" ? "text-sky-800" : "text-emerald-800"
+                      }
+                    >
+                      {loai === "DonHang" ? "THUỐC" : "HÀNG HÓA"}
+                    </strong>{" "}
+                    → thuộc{" "}
+                    <strong>
+                      {LOAI_LABEL[loai === "DonHang" ? "DonThuoc" : "DonHang"]}
+                    </strong>
+                    :
+                  </div>
+                  <ul className="space-y-1">
+                    {otherTabSuggestions.map((p) => {
+                      const target = suggestLoaiFor(p);
+                      if (!target) return null;
+                      return (
+                        <li
+                          key={p.id}
+                          className="flex items-center justify-between gap-2 rounded border bg-background px-2 py-1"
+                        >
+                          <span className="min-w-0 truncate">
+                            <span className="font-mono font-semibold">
+                              {normalizeOrderCodeText(p.slug)}
+                            </span>{" "}
+                            <span className="text-muted-foreground">{p.name}</span>
+                          </span>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            className="h-7 shrink-0"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => addProduct(p, scan.trim(), target)}
+                          >
+                            Thêm vào {LOAI_SHORT[target]}
+                          </Button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <div className="text-[11px]">
+                    Thẻ {LOAI_SHORT[loai === "DonHang" ? "DonThuoc" : "DonHang"]}{" "}
+                    soạn song song; lưu 2 phiếu cùng lúc bằng nút{" "}
+                    <strong>Lưu cả DT + DH</strong>.
+                  </div>
+                </div>
+              ) : (
               <>
                 Không tìm thấy — Enter để thêm <strong>Lỗi Mã</strong>.
                 {catalogList.length ? (
@@ -1019,6 +1318,7 @@ const CreateWarehouseOrderForm = forwardRef<
                   </span>
                 ) : null}
               </>
+              )
             }
             unitLabel={(p) => {
               const units = getSkuUnitOptions(skuUnitIndex, p.slug);
@@ -1167,16 +1467,37 @@ const CreateWarehouseOrderForm = forwardRef<
               </span>
             ) : null}
           </div>
-          <Button
-            size="lg"
-            onClick={() => void handleSubmit()}
-            disabled={createOrder.isPending || lines.length === 0}
-          >
-            {createOrder.isPending ? (
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+          <div className="flex flex-wrap items-center gap-2">
+            {isQ7PhieuLoai(loai) && q7PairCount === 2 ? (
+              <Button
+                size="lg"
+                variant="secondary"
+                data-testid="save-pair"
+                onClick={() => void handleSubmitPair()}
+                disabled={createOrder.isPending}
+                title={`Tạo 2 phiếu: DT (${carts.DonThuoc.length} dòng) + DH (${carts.DonHang.length} dòng)`}
+              >
+                {createOrder.isPending ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : null}
+                Lưu cả DT + DH
+                <span className="ml-1 text-xs font-normal opacity-80">
+                  ({carts.DonThuoc.length} + {carts.DonHang.length} dòng)
+                </span>
+              </Button>
             ) : null}
-            Lưu đơn
-          </Button>
+            <Button
+              size="lg"
+              data-testid="save-one"
+              onClick={() => void handleSubmit()}
+              disabled={createOrder.isPending || lines.length === 0}
+            >
+              {createOrder.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : null}
+              Lưu đơn {LOAI_SHORT[loai]}
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -1198,6 +1519,7 @@ const CreateWarehouseOrderForm = forwardRef<
             <AlertDialogCancel
               onClick={() => {
                 setDupInfo(null);
+                setDupTargets([]);
               }}
             >
               Hủy
@@ -1205,7 +1527,7 @@ const CreateWarehouseOrderForm = forwardRef<
             <AlertDialogAction
               onClick={(e) => {
                 e.preventDefault();
-                void doSave(true);
+                void doSave(true, dupTargets.length ? dupTargets : [loai]);
               }}
             >
               Chấp nhận lưu
