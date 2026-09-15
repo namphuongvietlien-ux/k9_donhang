@@ -66,15 +66,42 @@ export function vnNow(now: Date = new Date()): { date: string; hour: number; min
   };
 }
 
-/** Slot đang "tới giờ": từ giờ hẹn tới giờ hẹn + VACCINE_REMIND_WINDOW_MIN */
-export function getDueVaccineSlot(now: Date = new Date()): VaccineSlot | null {
+/** Nhắc trước giờ hẹn bao nhiêu phút (nháy 1 lần trên desktop) */
+export const VACCINE_PRE_REMIND_MIN = 15;
+
+export type VaccineReminderPhase = "pre" | "due";
+
+export interface VaccineActivePhase {
+  slot: VaccineSlot;
+  phase: VaccineReminderPhase;
+}
+
+/**
+ * Mọi khung nhắc đang hiệu lực (có thể 2 cùng lúc: "due" của 11:00 và "pre" của 12:30):
+ * - "pre": từ giờ hẹn − VACCINE_PRE_REMIND_MIN tới giờ hẹn (nhắc trước, desktop)
+ * - "due": từ giờ hẹn tới giờ hẹn + VACCINE_REMIND_WINDOW_MIN (tới giờ, desktop + popup giữa màn hình)
+ * Thứ tự: "due" trước "pre".
+ */
+export function getActiveVaccinePhases(now: Date = new Date()): VaccineActivePhase[] {
   const { hour, minute } = vnNow(now);
   const cur = hour * 60 + minute;
+  const out: VaccineActivePhase[] = [];
   for (const slot of VACCINE_PICKUP_SLOTS) {
     const start = slot.hour * 60 + slot.minute;
-    if (cur >= start && cur < start + VACCINE_REMIND_WINDOW_MIN) return slot;
+    if (cur >= start && cur < start + VACCINE_REMIND_WINDOW_MIN) out.push({ slot, phase: "due" });
+    else if (cur >= start - VACCINE_PRE_REMIND_MIN && cur < start) out.push({ slot, phase: "pre" });
   }
-  return null;
+  return out.sort((a, b) => (a.phase === b.phase ? 0 : a.phase === "due" ? -1 : 1));
+}
+
+/** Khung nhắc ưu tiên nhất đang hiệu lực (due trước pre) */
+export function getVaccineReminderPhase(now: Date = new Date()): VaccineActivePhase | null {
+  return getActiveVaccinePhases(now)[0] || null;
+}
+
+/** Slot đang "tới giờ" (giữ cho code cũ) */
+export function getDueVaccineSlot(now: Date = new Date()): VaccineSlot | null {
+  return getActiveVaccinePhases(now).find((p) => p.phase === "due")?.slot || null;
 }
 
 export interface VaccinePickupHit {
@@ -138,9 +165,16 @@ export async function fetchVaccinePickupHits(
   return hits;
 }
 
-export function formatVaccineReminder(slot: VaccineSlot, hits: VaccinePickupHit[]) {
+export function formatVaccineReminder(
+  slot: VaccineSlot,
+  hits: VaccinePickupHit[],
+  phase: VaccineReminderPhase = "due",
+) {
   const totalQty = hits.reduce((s, h) => s + h.lines.reduce((x, l) => x + l.qty, 0), 0);
-  const title = `💉 Nhắc lấy vaccine ${slot.time} — ${slot.label}`;
+  const title =
+    phase === "pre"
+      ? `⏰ ${VACCINE_PRE_REMIND_MIN} phút nữa lấy vaccine ${slot.time} — ${slot.label}`
+      : `💉 TỚI GIỜ lấy vaccine ${slot.time} — ${slot.label}`;
   const summary = hits
     .map((h) => `${h.soPhieu} (${h.kho}): ${h.lines.map((l) => `${l.sku} ×${l.qty}`).join(", ")}`)
     .join("\n");

@@ -2,7 +2,16 @@
  * Nút chuông trên header — chỉ hiện cho tài khoản admin (super_admin / manager).
  * Bật thông báo máy tính cho nhắc lấy vaccine; xem nhanh phiếu vaccine theo slot.
  */
-import { Bell, BellOff, BellRing, Loader2 } from "lucide-react";
+import { Bell, BellOff, BellRing, Loader2, Syringe } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -13,20 +22,73 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useVaccinePickupReminder } from "@/hooks/useVaccinePickupReminder";
-import { VACCINE_PICKUP_SLOTS } from "@/lib/vaccinePickup";
+import { VACCINE_PICKUP_SLOTS, VACCINE_PRE_REMIND_MIN } from "@/lib/vaccinePickup";
 import { cn } from "@/lib/utils";
 
 export function VaccinePickupReminderBell({ enabled }: { enabled: boolean }) {
-  const { permission, requestPermission, check, checking, lastResult } =
-    useVaccinePickupReminder(enabled);
+  const {
+    permission,
+    requestPermission,
+    check,
+    checking,
+    lastResult,
+    dueAlert,
+    dismissDueAlert,
+  } = useVaccinePickupReminder(enabled);
 
   if (!enabled) return null;
+
+  const totalDoses = dueAlert
+    ? dueAlert.hits.reduce((s, h) => s + h.lines.reduce((x, l) => x + l.qty, 0), 0)
+    : 0;
 
   const granted = permission === "granted";
   const denied = permission === "denied";
   const Icon = checking ? Loader2 : granted ? BellRing : denied ? BellOff : Bell;
 
   return (
+    <>
+    <AlertDialog open={!!dueAlert} onOpenChange={(o) => !o && dismissDueAlert()}>
+      <AlertDialogContent className="max-w-lg border-rose-300" data-testid="vaccine-due-popup">
+        <AlertDialogHeader>
+          <AlertDialogTitle className="flex items-center gap-2 text-rose-700">
+            <Syringe className="h-5 w-5" />
+            {dueAlert
+              ? `TỚI GIỜ LẤY VACCINE ${dueAlert.slot.time} — ${dueAlert.slot.label}`
+              : ""}
+          </AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-3 text-sm text-foreground">
+              <p className="text-muted-foreground">
+                {dueAlert?.hits.length} phiếu · {totalDoses} liều · ngày soạn hôm nay. Vui lòng
+                lấy vaccine đúng khung giờ.
+              </p>
+              <ul className="max-h-72 space-y-2 overflow-auto rounded-md border bg-muted/40 p-3">
+                {dueAlert?.hits.map((h) => (
+                  <li key={h.orderId}>
+                    <div className="font-semibold">
+                      {h.soPhieu} <span className="text-muted-foreground">· {h.kho}</span>
+                    </div>
+                    <ul className="ml-3 text-xs">
+                      {h.lines.map((l, i) => (
+                        <li key={`${l.sku}-${i}`}>
+                          <span className="font-mono">{l.sku}</span>
+                          {l.name ? ` — ${l.name}` : ""} ×{" "}
+                          <strong>{l.qty}</strong> {l.unit}
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogAction onClick={dismissDueAlert}>Đã biết</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
@@ -58,7 +120,8 @@ export function VaccinePickupReminderBell({ enabled }: { enabled: boolean }) {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">
         <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-          Khi tới giờ, web đang mở sẽ hiện thông báo trên máy + trong app (chỉ tài khoản admin).
+          Web đang mở (tài khoản admin): trước giờ {VACCINE_PRE_REMIND_MIN} phút nháy thông báo
+          desktop 1 lần; tới giờ báo desktop lần nữa + popup giữa màn hình.
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         {permission === "unsupported" ? (
@@ -98,6 +161,7 @@ export function VaccinePickupReminderBell({ enabled }: { enabled: boolean }) {
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
+    </>
   );
 }
 
