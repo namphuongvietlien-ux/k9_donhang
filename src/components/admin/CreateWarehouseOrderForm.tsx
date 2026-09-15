@@ -79,6 +79,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useProductGifts } from "@/hooks/useProductGifts";
+import { isMappedOldSlug, useSkuCodeMappings } from "@/hooks/useSkuCodeMappings";
 import { attachGiftLines } from "@/lib/productGifts";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
@@ -246,6 +247,7 @@ const CreateWarehouseOrderForm = forwardRef<
   const { data: q7 } = usePackingSourceWarehouse();
   const { createOrder } = useWarehouseOrderMutations();
   const { data: giftRules = [] } = useProductGifts();
+  const { mappings: skuCodeMappings } = useSkuCodeMappings();
   const { toast } = useToast();
   const scanRef = useRef<HTMLInputElement>(null);
 
@@ -378,7 +380,8 @@ const CreateWarehouseOrderForm = forwardRef<
   const catalogList: CatalogHit[] = useMemo(() => {
     const rows = Array.isArray(products) ? products : [];
     return rows
-      .filter((p) => isVisibleSellableCatalog(p))
+      // Mã cũ đã có mã mới (sku_code_mappings) → ẩn để quét mã vạch trúng mã mới
+      .filter((p) => isVisibleSellableCatalog(p) && !isMappedOldSlug(skuCodeMappings, p.slug))
       .map((p) => ({
         id: p.id,
         name: p.name,
@@ -398,7 +401,7 @@ const CreateWarehouseOrderForm = forwardRef<
         sku_industry: p.sku_industry || null,
         sku_detail: p.sku_detail || null,
       }));
-  }, [products]);
+  }, [products, skuCodeMappings]);
 
   const skuUnitIndex = useSkuUnitIndex(catalogList as CatalogProductRow[]);
 
@@ -685,6 +688,7 @@ const CreateWarehouseOrderForm = forwardRef<
         hit = byBarcode.hit || undefined;
       }
       if (!hit) {
+        if (s && redirectOldCode(s)) return true;
         toast({
           title: "Không tìm thấy mã",
           description: slug || barcode || "—",
@@ -696,6 +700,33 @@ const CreateWarehouseOrderForm = forwardRef<
       return true;
     },
   }));
+
+  /**
+   * Gõ / quét MÃ CŨ (TAM2012…) đã có mã mới → thêm mã mới, báo cho user.
+   * @returns true nếu đã xử lý
+   */
+  const redirectOldCode = (raw: string): boolean => {
+    const key = normalizeOrderCodeText(raw);
+    const m = skuCodeMappings.get(key);
+    if (!m) return false;
+    const target = normalizeOrderCodeText(m.long_slug);
+    const hit = catalogList.find((p) => normalizeOrderCodeText(p.slug) === target);
+    if (!hit) {
+      toast({
+        title: `${key} là mã cũ → mã mới ${m.long_slug}`,
+        description: "Mã mới chưa có trong danh mục đang tải — bấm Tải lại danh mục.",
+        variant: "destructive",
+      });
+      setScan("");
+      return true;
+    }
+    addProduct(hit, m.barcode || undefined);
+    toast({
+      title: `Mã cũ ${key} → đã dùng mã mới ${m.long_slug}`,
+      description: `${hit.name}. Mã cũ đã khóa để KiotViet/MISA không báo lệch mã vạch.`,
+    });
+    return true;
+  };
 
   /** Enter không khớp catalog → dòng mã ngoài (user tự điền tên/ĐVT/MV) */
   const addCustomSku = (raw: string) => {
@@ -761,6 +792,7 @@ const CreateWarehouseOrderForm = forwardRef<
       addProduct(suggestions[0], raw);
       return;
     }
+    if (redirectOldCode(raw)) return;
     // Không có trong thẻ này nhưng có ở thẻ Q7 còn lại → gợi ý DT/DH thay vì tạo Lỗi Mã
     if (otherTabSuggestions.length) {
       const best = otherTabSuggestions[0];
