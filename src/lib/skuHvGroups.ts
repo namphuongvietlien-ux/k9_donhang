@@ -125,4 +125,26 @@ export const HV_GROUPS: Record<string, HvGroupMeta> = {
   "MVSKMP": { title: "Khử mùi — mèo", industry: "VS", species: "M", merch: "VS", spec: "KMP" },
   "MVSMIE": { title: "Vệ sinh miệng / răng — mèo", industry: "VS", species: "M", merch: "VS", spec: "MIE" },
   "MVSSTP": { title: "Sữa tắm — mèo", industry: "VS", species: "M", merch: "VS", spec: "STP" },
+
+  // ── Bổ sung 14/09/2026 — nhóm có trong danh mục KiotViet nhưng chưa có trong sheet Ket_qua.
+  //    Nhóm HH (ký tự 2–3) đều hợp lệ theo Quy_tac_HV; tên nhóm suy từ tên hàng, cần đưa vào xlsx.
+  "CTPSUP": { title: "Súp thưởng — chó", industry: "TA", species: "C", merch: "TP", spec: "SUP" },
+  "HTPPHU": { title: "Thức ăn phụ khác — chó và mèo", industry: "TA", species: "H", merch: "TP", spec: "PHU" },
+  "CVCXXX": { title: "Lồng vận chuyển — chó", industry: "PK", species: "C", merch: "VC", spec: "XXX" },
+  "MDCXXX": { title: "Dụng cụ khác — mèo (xẻng, thảm cát)", industry: "PK", species: "M", merch: "DC", spec: "XXX" },
+  "MPKNVS": { title: "Nhà / khay vệ sinh — mèo", industry: "PK", species: "M", merch: "PK", spec: "NVS" },
+  "HVSTSP": { title: "Sữa tắm trị liệu — chó và mèo", industry: "VS", species: "H", merch: "VS", spec: "TSP" },
+  "HVSTST": { title: "Sát trùng (iodine…) — chó và mèo", industry: "VS", species: "H", merch: "VS", spec: "TST" },
+  "HVTCON": { title: "Cồn / hóa chất phòng khám", industry: "VT", species: "H", merch: "VT", spec: "CON" },
+  "HVTGIN": { title: "Giấy in nhiệt / vật tư máy", industry: "VT", species: "H", merch: "VT", spec: "GIN" },
+  "HVTCAN": { title: "Can, bình chứa", industry: "VT", species: "H", merch: "VT", spec: "CAN" },
+  "HĐTHTR": { title: "Thuốc hỗ trợ tim / nội khoa — chó và mèo", industry: "YT", species: "H", merch: "ĐT", spec: "HTR" },
+  "CĐTHTR": { title: "Thuốc hỗ trợ tim / nội khoa — chó", industry: "YT", species: "C", merch: "ĐT", spec: "HTR" },
+  "HĐTTKV": { title: "Thuốc kháng viêm — chó và mèo", industry: "YT", species: "H", merch: "ĐT", spec: "TKV" },
+  "HĐTTGV": { title: "Tẩy giun / ve (nhỏ gáy, viên) — chó và mèo", industry: "YT", species: "H", merch: "ĐT", spec: "TGV" },
+  "CĐTTGV": { title: "Tẩy giun / ve (nhỏ gáy, viên) — chó", industry: "YT", species: "C", merch: "ĐT", spec: "TGV" },
+  "MĐTTGV": { title: "Tẩy giun / ve (nhỏ gáy, viên) — mèo", industry: "YT", species: "M", merch: "ĐT", spec: "TGV" },
+  "CĐTVAC": { title: "Vắc xin — chó", industry: "YT", species: "C", merch: "ĐT", spec: "VAC" },
+  "HĐTTGĐ": { title: "Thuốc gây tê / gây mê — chó và mèo", industry: "YT", species: "H", merch: "ĐT", spec: "TGĐ" },
+  "HĐTKCB": { title: "Dụng cụ khám chữa bệnh — chó và mèo", industry: "YT", species: "H", merch: "ĐT", spec: "KCB" },
 };

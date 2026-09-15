@@ -13,6 +13,7 @@ import {
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { useWarehouses, warehouseLabel } from "@/hooks/useWarehouses";
+import { resolveLongSlug, useSkuCodeMappings } from "@/hooks/useSkuCodeMappings";
 import { useProducts } from "@/hooks/useProducts";
 import { warehouseShortLabel } from "@/lib/warehouseMeta";
 import { usePackingOrders } from "@/hooks/useOrders";
@@ -90,6 +91,7 @@ export default function PackingSummaryBoard({
   className,
 }: PackingSummaryBoardProps) {
   const { warehouses, loading: whLoading } = useWarehouses();
+  const { mappings: skuCodeMappings } = useSkuCodeMappings();
   const { data: q7, error: q7Error } = usePackingSourceWarehouse();
   const [packingDate, setPackingDate] = useState(() => toDateKey(new Date()));
   const [mode, setMode] = useState<PackingMode>("total");
@@ -406,7 +408,8 @@ export default function PackingSummaryBoard({
             targetRow.getCell(column).style = { ...templateRow.getCell(column).style };
           }
         }
-        targetRow.getCell(1).value = row.productSlug || row.productName;
+        targetRow.getCell(1).value =
+          resolveLongSlug(skuCodeMappings, row.productSlug) || row.productName;
         targetRow.getCell(6).value = "KHODDKD0007 | Kho Địa điểm kinh doanh Q7";
         targetRow.getCell(8).value = row.unit || "";
         targetRow.getCell(9).value = Number(row.orderedQty) || 0;

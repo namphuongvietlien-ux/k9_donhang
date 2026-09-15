@@ -6,6 +6,7 @@ import {
   type ParsedCatalogStockImport,
 } from "@/lib/catalogStockImport";
 import { normalizeOrderCodeText } from "@/lib/packingWindows";
+import { classifySkuByConvention } from "@/lib/skuConvention";
 import {
   displayStockUnit,
   normalizeUnitKey,
@@ -21,6 +22,7 @@ const EXTRA_PRODUCT_COLUMNS = [
   "barcode_2",
   "parent_sku",
   "is_new",
+  "category_group",
 ] as const;
 
 function isSchemaColumnError(message?: string | null) {
@@ -234,16 +236,24 @@ async function ensureProducts(
    */
   const validLines = mergeConversionLines(rawValidLines);
   const requestedCodes = [...new Set(validLines.map((l) => (l.productSlug || "").trim()).filter(Boolean))];
+  /** category_group hiện có của mã đã tồn tại — chỉ điền khi còn trống, không ghi đè */
+  const existingCategory = new Map<string, string | null>();
 
   // Load existing in chunks of 200 (.in limit)
   for (let i = 0; i < requestedCodes.length; i += 200) {
     const slice = requestedCodes.slice(i, i + 200);
-    const { data: existing } = await supabase
+    let { data: existing, error: exErr } = await supabase
       .from("products")
-      .select("id, slug")
+      .select("id, slug, category_group")
       .in("slug", slice);
-    for (const p of (existing as { id: string; slug: string }[] | null) || []) {
+    if (exErr && isSchemaColumnError(exErr.message)) {
+      const retry = await supabase.from("products").select("id, slug").in("slug", slice);
+      existing = retry.data;
+      exErr = retry.error;
+    }
+    for (const p of (existing as { id: string; slug: string; category_group?: string | null }[] | null) || []) {
       slugToId.set(normalizeOrderCodeText(p.slug), p.id);
+      existingCategory.set(p.id, p.category_group || null);
     }
   }
 
@@ -263,6 +273,8 @@ async function ensureProducts(
     barcode2?: string | null;
     price2?: number | null;
     unit2Ratio?: number | null;
+    /** Nhóm hàng suy từ quy ước mã SKU — điền khi DB còn trống */
+    categoryGroup?: string | null;
   }[] = [];
   const toCreateMap = new Map<
     string,
@@ -278,6 +290,7 @@ async function ensureProducts(
       barcode2?: string | null;
       price2?: number | null;
       unit2Ratio?: number | null;
+      categoryGroup?: string | null;
     }
   >();
 
@@ -287,7 +300,10 @@ async function ensureProducts(
     const rawCode = String(line.productSlug || "").trim();
     const key = normalizeOrderCodeText(rawCode);
     const existingId = slugToId.get(key) || slugToId.get(rawCode);
+    const categoryGroup = classifySkuByConvention(rawCode || line.maHang).categoryGroup;
     if (existingId) {
+      const fillCategory =
+        categoryGroup && !existingCategory.get(existingId) ? categoryGroup : null;
       if (parsed.mode === "catalogFast") {
         toUpdate.push({
           id: existingId,
@@ -300,6 +316,7 @@ async function ensureProducts(
           barcode2: line.barcode2 ?? null,
           price2: line.price2 ?? null,
           unit2Ratio: line.unit2Ratio ?? null,
+          categoryGroup: fillCategory,
         });
       } else if (parsed.mode === "stockQ7") {
         if (parsed.layout === "misaSummary") continue;
@@ -313,6 +330,7 @@ async function ensureProducts(
             parentSku: null,
             skipUnitPatch: true,
             lineDvt: line.dvt || "",
+            categoryGroup: fillCategory,
           });
         }
       }
@@ -334,6 +352,7 @@ async function ensureProducts(
         barcode2: line.barcode2 ?? null,
         price2: line.price2 ?? null,
         unit2Ratio: line.unit2Ratio ?? null,
+        categoryGroup,
       });
     }
   }
@@ -353,6 +372,7 @@ async function ensureProducts(
         if (u.barcode2) patch.barcode_2 = u.barcode2;
         if (u.price2 != null) patch.price_2 = u.price2;
         if (u.unit2Ratio != null) patch.unit_2_ratio = u.unit2Ratio;
+        if (u.categoryGroup) patch.category_group = u.categoryGroup;
 
         if (u.barcode) {
           const { data: prod } = await supabase
@@ -424,6 +444,7 @@ async function ensureProducts(
       barcode_2: c.barcode2 || null,
       price_2: c.price2 ?? null,
       unit_2_ratio: c.unit2Ratio ?? null,
+      category_group: c.categoryGroup ?? null,
       description: c.parentSku
         ? `Import danh mục (Parent: ${c.parentSku})`
         : "Import danh mục từ Excel (GAS catalogFast)",

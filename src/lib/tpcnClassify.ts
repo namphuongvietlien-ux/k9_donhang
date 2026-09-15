@@ -108,7 +108,7 @@ export function needsTpcnThuocMove(p: {
 }): boolean {
   if (!isTpcnProduct(p)) return false;
   const industry = foldTpcnSlug(p.sku_industry).slice(0, 2);
-  if (industry === "YT" || industry === "VT") return false;
+  if (industry === "YT") return false;
   const group = String(p.category_group || "").trim().toUpperCase();
   if (group === "THUOC") return false;
   return true;

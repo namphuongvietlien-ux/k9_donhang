@@ -116,6 +116,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { resolveLongSlug, useSkuCodeMappings } from "@/hooks/useSkuCodeMappings";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
@@ -204,6 +205,7 @@ export default function WarehouseOrderDetail({
     refetch: refetchStock,
   } = useStock(stockWhId);
   const { toast } = useToast();
+  const { mappings: skuCodeMappings } = useSkuCodeMappings();
 
   const [packed, setPacked] = useState<Record<string, number>>({});
   /** Draft SL yêu cầu — chỉ ghi DB khi bấm Lưu xác nhận (tab Quản Lý) */
@@ -1025,7 +1027,8 @@ export default function WarehouseOrderDetail({
     const lines: TransferExportLine[] = detail.items
       .filter((it) => (Number(it.sl) || 0) > 0)
       .map((it) => ({
-        maHang: it.parentSku || it.maHang,
+        // Mã cũ (TAM2012…) → mã mới cùng mã vạch, kể cả phiếu đã khóa
+        maHang: resolveLongSlug(skuCodeMappings, it.parentSku || it.maHang),
         maVach: it.maVach || "",
         tenHang: it.tenHang,
         kho: khoXuat,
