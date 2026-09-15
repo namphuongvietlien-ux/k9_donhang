@@ -24,6 +24,7 @@ import CreateWarehouseOrderForm, {
 } from "@/components/admin/CreateWarehouseOrderForm";
 import NewProductsStrip from "@/components/admin/NewProductsStrip";
 import CatalogAdminHub from "@/components/admin/CatalogAdminHub";
+import VaccinePickupReminderBell from "@/components/admin/VaccinePickupReminderBell";
 import ReceiveOrdersPanel from "@/components/admin/ReceiveOrdersPanel";
 import PackingWeekCalendar from "@/components/admin/PackingWeekCalendar";
 import PackingSummaryBoard from "@/components/admin/PackingSummaryBoard";
@@ -635,6 +636,9 @@ export default function WarehousePortal() {
                 Tất cả kho
               </Badge>
             )}
+            <VaccinePickupReminderBell
+              enabled={role === "super_admin" || role === "manager"}
+            />
             {(role === "super_admin" || role === "manager") && (
               <Button
                 asChild
