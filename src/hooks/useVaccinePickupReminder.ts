@@ -93,13 +93,6 @@ export function useVaccinePickupReminder(enabled: boolean) {
           /* một số trình duyệt chặn Notification ngoài Service Worker */
         }
       }
-      const prev = document.title;
-      if (!prev.startsWith("💉")) {
-        document.title = `💉 ${prev}`;
-        window.setTimeout(() => {
-          if (document.title.startsWith("💉 ")) document.title = prev;
-        }, 15 * 60_000);
-      }
     },
     [toast],
   );

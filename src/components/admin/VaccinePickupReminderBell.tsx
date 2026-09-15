@@ -35,7 +35,7 @@ export function VaccinePickupReminderBell({ enabled }: { enabled: boolean }) {
           variant="outline"
           data-testid="vaccine-reminder-bell"
           className={cn(
-            "border-slate-500 text-slate-100 hover:bg-slate-800 hover:text-white",
+            "bg-transparent border-slate-500 text-slate-100 hover:bg-slate-800 hover:text-white",
             granted && "border-emerald-400 text-emerald-200",
             denied && "border-amber-400 text-amber-200",
           )}
