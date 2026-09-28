@@ -64,6 +64,24 @@ export default function ProductGiftsPanel() {
     [available, giftSearch],
   );
 
+  const handleRemove = async (id: string) => {
+    try {
+      await remove.mutateAsync(id);
+      toast({ title: "Đã xóa quy tắc tặng kèm" });
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      // Fallback xóa cứng (khi chưa có cột is_deleted) có thể vướng trigger khóa phiếu.
+      const isLocked = /khóa|hoàn thành|P0001|không thể thay đổi/i.test(raw);
+      toast({
+        title: "Không xóa được quy tắc",
+        description: isLocked
+          ? "Quy tắc đang gắn với phiếu đã khóa/hoàn tất. Hãy chạy DDL thêm cột is_deleted để xóa mềm (ẩn quy tắc mà không đụng phiếu cũ)."
+          : raw,
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleAdd = async () => {
     if (!mainId || !giftId) {
       toast({ title: "Chọn sản phẩm chính và hàng tặng", variant: "destructive" });
@@ -294,7 +312,8 @@ export default function ProductGiftsPanel() {
                         size="icon"
                         className="h-8 w-8"
                         aria-label="Xóa quy tắc"
-                        onClick={() => void remove.mutateAsync(rule.id)}
+                        disabled={remove.isPending}
+                        onClick={() => void handleRemove(rule.id)}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
