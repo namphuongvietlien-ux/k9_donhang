@@ -31,6 +31,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -632,6 +633,9 @@ function VariantManager() {
         <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-auto">
           <DialogHeader>
             <DialogTitle>Quản lý mã con (Parent_SKU)</DialogTitle>
+            <DialogDescription className="sr-only">
+              Thêm, sửa, xóa các mã con thuộc cùng một Parent_SKU.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-1">
             <div className="space-y-1">
@@ -769,6 +773,9 @@ function VariantManager() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Thêm mã hàng mới</DialogTitle>
+            <DialogDescription className="sr-only">
+              Nhập thông tin để tạo một mã hàng mới trong danh mục.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
             {(

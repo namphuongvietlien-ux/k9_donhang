@@ -64,6 +64,19 @@ export default function ProductGiftsPanel() {
     [available, giftSearch],
   );
 
+  const handleRemove = async (id: string) => {
+    try {
+      await remove.mutateAsync(id);
+      toast({ title: "Đã xóa quy tắc tặng kèm" });
+    } catch (error) {
+      toast({
+        title: "Không xóa được quy tắc",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleAdd = async () => {
     if (!mainId || !giftId) {
       toast({ title: "Chọn sản phẩm chính và hàng tặng", variant: "destructive" });
@@ -294,7 +307,8 @@ export default function ProductGiftsPanel() {
                         size="icon"
                         className="h-8 w-8"
                         aria-label="Xóa quy tắc"
-                        onClick={() => void remove.mutateAsync(rule.id)}
+                        disabled={remove.isPending}
+                        onClick={() => void handleRemove(rule.id)}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>

@@ -9,6 +9,7 @@ export type ProductGiftRule = {
   gift_product_id: string;
   quantity: number;
   is_active: boolean;
+  is_deleted?: boolean | null;
   notes: string | null;
   limit_kind?: GiftLimitKind | null;
   starts_on?: string | null;
@@ -20,10 +21,14 @@ export type ProductGiftRule = {
 };
 
 const GIFT_SELECT =
-  "id, main_product_id, gift_product_id, quantity, is_active, notes, limit_kind, starts_on, ends_on, max_total_qty, used_qty, main:main_product_id(id, slug, name, unit), gift:gift_product_id(id, slug, name, unit)";
+  "id, main_product_id, gift_product_id, quantity, is_active, is_deleted, notes, limit_kind, starts_on, ends_on, max_total_qty, used_qty, main:main_product_id(id, slug, name, unit), gift:gift_product_id(id, slug, name, unit)";
 
 const GIFT_SELECT_BASIC =
   "id, main_product_id, gift_product_id, quantity, is_active, notes, main:main_product_id(id, slug, name, unit), gift:gift_product_id(id, slug, name, unit)";
+
+/** Cột chưa có trong schema (cần chạy DDL) → nhận diện để fallback êm. */
+const MISSING_COLUMN_RE =
+  /is_deleted|limit_kind|starts_on|ends_on|max_total_qty|used_qty|column|does not exist|schema cache|PGRST/i;
 
 export type SaveProductGiftInput = {
   mainProductId: string;
@@ -46,7 +51,7 @@ export function useProductGifts() {
         .order("created_at", { ascending: false });
       let data = first.data;
       let error = first.error;
-      if (error && /limit_kind|starts_on|ends_on|max_total_qty|used_qty/i.test(error.message || "")) {
+      if (error && MISSING_COLUMN_RE.test(error.message || "")) {
         const retry = await supabase
           .from("product_gifts" as never)
           .select(GIFT_SELECT_BASIC)
@@ -60,13 +65,15 @@ export function useProductGifts() {
         }
         throw error;
       }
-      return (data || []) as unknown as ProductGiftRule[];
+      const rows = (data || []) as unknown as ProductGiftRule[];
+      // Ẩn quy tắc đã xóa mềm (is_deleted). Trước khi có cột thì undefined → vẫn hiện.
+      return rows.filter((rule) => rule.is_deleted !== true);
     },
   });
 
   const save = useMutation({
     mutationFn: async (input: SaveProductGiftInput) => {
-      const payload: Record<string, unknown> = {
+      const base: Record<string, unknown> = {
         main_product_id: input.mainProductId,
         gift_product_id: input.giftProductId,
         quantity: input.quantity,
@@ -77,11 +84,19 @@ export function useProductGifts() {
         max_total_qty:
           input.limitKind === "qty_limit" ? Number(input.maxTotalQty) || null : null,
       };
-      const { error } = await supabase.from("product_gifts" as never).upsert(
-        payload as never,
+      // Reset is_deleted để "hồi sinh" đúng khi thêm lại cặp đã xóa mềm.
+      let res = await supabase.from("product_gifts" as never).upsert(
+        { ...base, is_deleted: false } as never,
         { onConflict: "main_product_id,gift_product_id" },
       );
-      if (error) throw error;
+      if (res.error && /is_deleted/i.test(res.error.message || "")) {
+        // Chưa chạy DDL thêm cột → upsert không kèm is_deleted.
+        res = await supabase.from("product_gifts" as never).upsert(
+          base as never,
+          { onConflict: "main_product_id,gift_product_id" },
+        );
+      }
+      if (res.error) throw res.error;
       await supabase
         .from("products")
         .update({ has_gift: true } as never)
@@ -92,8 +107,19 @@ export function useProductGifts() {
 
   const remove = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("product_gifts" as never).delete().eq("id", id);
-      if (error) throw error;
+      // Xóa mềm: đánh dấu is_deleted + tắt hiệu lực (không áp cho phiếu mới).
+      const soft = await supabase
+        .from("product_gifts" as never)
+        .update({ is_deleted: true, is_active: false } as never)
+        .eq("id", id);
+      if (!soft.error) return;
+      // Cột is_deleted chưa tồn tại (chưa chạy DDL) → fallback xóa cứng.
+      if (/is_deleted|column|does not exist|schema cache|PGRST/i.test(soft.error.message || "")) {
+        const hard = await supabase.from("product_gifts" as never).delete().eq("id", id);
+        if (hard.error) throw hard.error;
+        return;
+      }
+      throw soft.error;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["product-gifts"] }),
   });
