@@ -69,9 +69,14 @@ export default function ProductGiftsPanel() {
       await remove.mutateAsync(id);
       toast({ title: "Đã xóa quy tắc tặng kèm" });
     } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      // Fallback xóa cứng (khi chưa có cột is_deleted) có thể vướng trigger khóa phiếu.
+      const isLocked = /khóa|hoàn thành|P0001|không thể thay đổi/i.test(raw);
       toast({
         title: "Không xóa được quy tắc",
-        description: error instanceof Error ? error.message : String(error),
+        description: isLocked
+          ? "Quy tắc đang gắn với phiếu đã khóa/hoàn tất. Hãy chạy DDL thêm cột is_deleted để xóa mềm (ẩn quy tắc mà không đụng phiếu cũ)."
+          : raw,
         variant: "destructive",
       });
     }

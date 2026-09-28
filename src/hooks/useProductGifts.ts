@@ -106,14 +106,17 @@ export function useProductGifts() {
   });
 
   const remove = useMutation({
+    // Lỗi xóa mang tính xác định (RLS / phiếu đã khóa) — không retry để tránh gọi 400 hai lần.
+    retry: 0,
     mutationFn: async (id: string) => {
-      // Xóa mềm: đánh dấu is_deleted + tắt hiệu lực (không áp cho phiếu mới).
+      // Xóa mềm: chỉ UPDATE product_gifts, KHÔNG delete cứng nên không kích hoạt
+      // cascade ON DELETE SET NULL xuống order_items (tránh trigger khóa phiếu P0001).
       const soft = await supabase
         .from("product_gifts" as never)
         .update({ is_deleted: true, is_active: false } as never)
         .eq("id", id);
       if (!soft.error) return;
-      // Cột is_deleted chưa tồn tại (chưa chạy DDL) → fallback xóa cứng.
+      // Cột is_deleted chưa tồn tại (chưa chạy DDL) → fallback xóa cứng (best-effort).
       if (/is_deleted|column|does not exist|schema cache|PGRST/i.test(soft.error.message || "")) {
         const hard = await supabase.from("product_gifts" as never).delete().eq("id", id);
         if (hard.error) throw hard.error;
